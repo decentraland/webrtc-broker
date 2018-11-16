@@ -9,15 +9,15 @@ import (
 	"time"
 )
 
-type MockWriter struct {
-}
-
 type MockWebsocket struct {
-	lastWrite []byte
-	messages  [][]byte
-	index     int
+	messages [][]byte
+	index    int
 }
 
+func (ws *MockWebsocket) SetWriteDeadline(t time.Time) error          { return nil }
+func (ws *MockWebsocket) SetReadDeadline(t time.Time) error           { return nil }
+func (ws *MockWebsocket) SetReadLimit(int64)                          {}
+func (ws *MockWebsocket) SetPongHandler(h func(appData string) error) {}
 func (ws *MockWebsocket) ReadMessage() (messageType int, p []byte, err error) {
 	if ws.index < len(ws.messages) {
 		i := ws.index
@@ -27,20 +27,9 @@ func (ws *MockWebsocket) ReadMessage() (messageType int, p []byte, err error) {
 
 	return websocket.BinaryMessage, nil, errors.New("closed")
 }
-
-func (ws *MockWebsocket) Close() error {
-	return nil
-}
-
-func (ws *MockWebsocket) WriteMessage(messageType int, bytes []byte) error {
-	ws.lastWrite = bytes
-	return nil
-}
-
-func now() (time.Time, float64) {
-	now := time.Now()
-	return now, float64(now.UnixNano() / int64(time.Millisecond))
-}
+func (ws *MockWebsocket) WritePreparedMessage(pm *websocket.PreparedMessage) error { return nil }
+func (ws *MockWebsocket) WriteMessage(messageType int, bytes []byte) error         { return nil }
+func (ws *MockWebsocket) Close() error                                             { return nil }
 
 func makeClientPosition(x float32, z float32) *clientPosition {
 	p := parcel{
@@ -75,7 +64,7 @@ func TestReadToEnqueueMessage(t *testing.T) {
 
 	state := MakeState()
 	defer Close(state)
-	c := &client{conn: conn, position: nil, flowStatus: FlowStatus_UNKNOWN_STATUS}
+	c := makeClient(conn)
 
 	go read(state, c)
 
@@ -90,7 +79,7 @@ func TestReadToEnqueueMessage(t *testing.T) {
 func TestProcessMessageToChangeFlowStatus(t *testing.T) {
 	state := MakeState()
 	defer Close(state)
-	c := &client{conn: nil, position: nil, flowStatus: FlowStatus_UNKNOWN_STATUS}
+	c := makeClient(nil)
 
 	ts, ms := now()
 
@@ -107,10 +96,14 @@ func TestProcessMessageToChangeFlowStatus(t *testing.T) {
 
 func TestProcessMessageToBroadcastChat(t *testing.T) {
 	conn1 := &MockWebsocket{}
-	c1 := &client{conn: conn1, position: makeClientPosition(0, 0)}
+	c1 := makeClient(conn1)
+	defer c1.close()
+	c1.position = makeClientPosition(0, 0)
 
 	conn2 := &MockWebsocket{}
-	c2 := &client{conn: conn2, position: makeClientPosition(0, 0)}
+	c2 := makeClient(conn2)
+	c2.position = makeClientPosition(0, 0)
+	defer c2.close()
 
 	state := MakeState()
 	defer Close(state)
@@ -133,16 +126,20 @@ func TestProcessMessageToBroadcastChat(t *testing.T) {
 	enqueuedMessage := enqueuedMessage{client: c1, bytes: data, msgType: MessageType_CHAT, ts: ts}
 
 	processMessage(state, &enqueuedMessage)
-
-	require.Equal(t, conn2.lastWrite, data, "not data was sent")
+	require.Equal(t, len(c1.send), 0, "data was sent")
+	require.Equal(t, len(c2.send), 1, "not data was sent")
 }
 
 func TestProcessMessageToBroadcastProfile(t *testing.T) {
 	conn1 := &MockWebsocket{}
-	c1 := &client{conn: conn1, position: makeClientPosition(0, 0)}
+	c1 := makeClient(conn1)
+	defer c1.close()
+	c1.position = makeClientPosition(0, 0)
 
 	conn2 := &MockWebsocket{}
-	c2 := &client{conn: conn2, position: makeClientPosition(0, 0)}
+	c2 := makeClient(conn2)
+	defer c2.close()
+	c2.position = makeClientPosition(0, 0)
 
 	state := MakeState()
 	defer Close(state)
@@ -167,15 +164,20 @@ func TestProcessMessageToBroadcastProfile(t *testing.T) {
 
 	processMessage(state, &enqueuedMessage)
 
-	require.Equal(t, conn2.lastWrite, data, "not data was sent")
+	require.Equal(t, len(c1.send), 0, "data was sent")
+	require.Equal(t, len(c2.send), 1, "not data was sent")
 }
 
 func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 	conn1 := &MockWebsocket{}
-	c1 := &client{conn: conn1, position: makeClientPosition(0, 0)}
+	c1 := makeClient(conn1)
+	defer c1.close()
+	c1.position = makeClientPosition(0, 0)
 
 	conn2 := &MockWebsocket{}
-	c2 := &client{conn: conn2, position: makeClientPosition(0, 0)}
+	c2 := makeClient(conn2)
+	defer c2.close()
+	c2.position = makeClientPosition(0, 0)
 
 	state := MakeState()
 	defer Close(state)
@@ -202,7 +204,8 @@ func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 
 	processMessage(state, &enqueuedMessage)
 
-	require.Equal(t, conn2.lastWrite, data, "not data was sent")
+	require.Equal(t, len(c1.send), 0, "data was sent")
+	require.Equal(t, len(c2.send), 1, "not data was sent")
 
 	require.Equal(t, c1.position.quaternion, [7]float32{10.3, 0, 9, 0, 0, 0, 0}, "position is not stored")
 	require.Equal(t, c1.position.parcel, parcel{10, 9}, "parcel is not stored")
@@ -210,10 +213,14 @@ func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 
 func TestBroadcastOutsideCommArea(t *testing.T) {
 	conn1 := &MockWebsocket{}
-	c1 := &client{conn: conn1, position: makeClientPosition(0, 0)}
+	c1 := makeClient(conn1)
+	defer c1.close()
+	c1.position = makeClientPosition(0, 0)
 
 	conn2 := &MockWebsocket{}
-	c2 := &client{conn: conn2, position: makeClientPosition(11, 0)}
+	c2 := makeClient(conn2)
+	defer c2.close()
+	c2.position = makeClientPosition(0, 0)
 
 	state := MakeState()
 	defer Close(state)
@@ -237,15 +244,20 @@ func TestBroadcastOutsideCommArea(t *testing.T) {
 
 	processMessage(state, &enqueuedMessage)
 
-	require.Equal(t, len(conn2.lastWrite), 0, "data was sent")
+	require.Equal(t, len(c1.send), 0, "data was sent")
+	require.Equal(t, len(c2.send), 1, "not data was sent")
 }
 
 func BenchmarkProcessPositionMessage(b *testing.B) {
 	conn1 := &MockWebsocket{}
-	c1 := &client{conn: conn1, position: makeClientPosition(0, 0)}
+	c1 := makeClient(conn1)
+	defer c1.close()
+	c1.position = makeClientPosition(0, 0)
 
 	conn2 := &MockWebsocket{}
-	c2 := &client{conn: conn2, position: makeClientPosition(0, 0)}
+	c2 := makeClient(conn2)
+	defer c2.close()
+	c2.position = makeClientPosition(0, 0)
 
 	state := MakeState()
 	defer Close(state)
