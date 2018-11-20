@@ -97,10 +97,6 @@ type client struct {
 	flowStatus FlowStatus
 	peerId     string
 	send       chan websocket.PreparedMessage
-
-	transient struct {
-		genericMessage *GenericMessage
-	}
 }
 
 func makeClient(conn IWebsocket) *client {
@@ -176,6 +172,8 @@ func read(state *WorldCommunicationState, c *client) {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
+
+	genericMessage := &GenericMessage{}
 	for {
 		_, bytes, err := c.conn.ReadMessage()
 		if err != nil {
@@ -186,22 +184,18 @@ func read(state *WorldCommunicationState, c *client) {
 			break
 		}
 
-		if c.transient.genericMessage == nil {
-			c.transient.genericMessage = &GenericMessage{}
-		}
-		generic := new(GenericMessage)
-		if err := proto.Unmarshal(bytes, generic); err != nil {
+		if err := proto.Unmarshal(bytes, genericMessage); err != nil {
 			log.Println("Failed to load:", err)
 			continue
 		}
 
-		ts := time.Unix(0, int64(generic.GetTime())*int64(time.Millisecond))
+		ts := time.Unix(0, int64(genericMessage.GetTime())*int64(time.Millisecond))
 		// if ts.After(time.Now()) {
 		// 	// TODO
 		// 	continue
 		// }
 
-		message := &enqueuedMessage{client: c, msgType: generic.GetType(), ts: ts, bytes: bytes}
+		message := &enqueuedMessage{client: c, msgType: genericMessage.GetType(), ts: ts, bytes: bytes}
 		state.queue <- message
 	}
 }

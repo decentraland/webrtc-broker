@@ -256,11 +256,14 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 
 	conn2 := &MockWebsocket{}
 	c2 := makeClient(conn2)
+	close(c2.send)
+	c2.send = make(chan websocket.PreparedMessage, b.N)
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
 	state := MakeState()
 	defer Close(state)
+
 	state.clients[c1] = true
 	state.clients[c2] = true
 
@@ -281,6 +284,7 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 	data, err := proto.Marshal(msg)
 	require.NoError(b, err)
 	enqueuedMessage := enqueuedMessage{client: c1, bytes: data, msgType: MessageType_POSITION, ts: ts}
+
 	for i := 0; i < b.N; i++ {
 		processMessage(state, &enqueuedMessage)
 	}
