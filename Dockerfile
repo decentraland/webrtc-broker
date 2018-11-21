@@ -19,5 +19,3 @@ WORKDIR /root
 COPY --from=builder /usr/src/app .
 
 EXPOSE 9090
-
-CMD [ "./communications-server-go" ]

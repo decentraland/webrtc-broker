@@ -27,6 +27,7 @@ func main() {
 	newrelicApiKey := flag.String("newrelicKey", "", "")
 	flag.Parse()
 
+	log.Println("newrelic", *newrelicApiKey)
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 
 	if *newrelicApiKey != "" {
