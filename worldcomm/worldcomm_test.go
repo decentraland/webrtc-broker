@@ -1,6 +1,7 @@
 package worldcomm
 
 import (
+	"io"
 	"errors"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
@@ -27,7 +28,7 @@ func (ws *MockWebsocket) ReadMessage() (messageType int, p []byte, err error) {
 
 	return websocket.BinaryMessage, nil, errors.New("closed")
 }
-func (ws *MockWebsocket) WritePreparedMessage(pm *websocket.PreparedMessage) error { return nil }
+func (ws *MockWebsocket) NextWriter(messageType int) (io.WriteCloser, error) { return nil, nil }
 func (ws *MockWebsocket) WriteMessage(messageType int, bytes []byte) error         { return nil }
 func (ws *MockWebsocket) Close() error                                             { return nil }
 
@@ -257,7 +258,7 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 	conn2 := &MockWebsocket{}
 	c2 := makeClient(conn2)
 	close(c2.send)
-	c2.send = make(chan websocket.PreparedMessage, b.N)
+	c2.send = make(chan []byte, b.N)
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 

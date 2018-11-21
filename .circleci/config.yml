@@ -4,9 +4,7 @@ jobs:
     docker:
       - image: circleci/golang:1.11.1
 
-        working_directory: /go/src/github.com/decentraland/communications-server-go
-        steps:
-          - checkout
-
-          - run: go get -v -t -d ./...
-          - run: make test
+    steps:
+      - checkout
+      - run: go get -v
+      - run: make test

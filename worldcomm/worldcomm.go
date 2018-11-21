@@ -1,6 +1,7 @@
 package worldcomm
 
 import (
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -85,8 +86,8 @@ type IWebsocket interface {
 
 	ReadMessage() (messageType int, p []byte, err error)
 
+	NextWriter(messageType int) (io.WriteCloser, error)
 	WriteMessage(messageType int, data []byte) error
-	WritePreparedMessage(pm *websocket.PreparedMessage) error
 
 	Close() error
 }
@@ -96,7 +97,7 @@ type client struct {
 	position   *clientPosition
 	flowStatus FlowStatus
 	peerId     string
-	send       chan websocket.PreparedMessage
+	send       chan []byte
 }
 
 func makeClient(conn IWebsocket) *client {
@@ -104,7 +105,7 @@ func makeClient(conn IWebsocket) *client {
 		conn:       conn,
 		position:   nil,
 		flowStatus: FlowStatus_UNKNOWN_STATUS,
-		send:       make(chan websocket.PreparedMessage, 256),
+		send:       make(chan []byte, 256),
 	}
 }
 
@@ -168,7 +169,15 @@ func read(state *WorldCommunicationState, c *client) {
 	}()
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error {
+	c.conn.SetPongHandler(func(s string) error {
+		now := time.Now().UTC()
+		t, err := time.Parse(time.UnixDate, s)
+		if err == nil {
+			d := now.Sub(t)
+			log.Println("avg ping", d / 2, "ping roundtrip:", d)
+		} else {
+			log.Println("cannot parse pong date")
+		}
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
@@ -206,35 +215,33 @@ func write(state *WorldCommunicationState, c *client) {
 		ticker.Stop()
 		c.conn.Close()
 	}()
+
 	for {
 		select {
-		case message, ok := <-c.send:
+		case bytes, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			if err := c.conn.WritePreparedMessage(&message); err != nil {
-				log.Println(err)
+			w, err := c.conn.NextWriter(websocket.BinaryMessage)
+			if err != nil {
 				return
 			}
+			w.Write(bytes)
 
-			for i := 0; i < len(c.send); i++ {
-				message, ok = <-c.send
-				if !ok {
-					c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-					return
-				}
-
-				if err := c.conn.WritePreparedMessage(&message); err != nil {
-					log.Println(err)
-					return
-				}
+			n := len(c.send)
+			for i := 0; i < n; i++ {
+				bytes = <- c.send
+				w.Write(bytes)
 			}
+
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			bytes := []byte(time.Now().UTC().Format(time.UnixDate))
+			if err := c.conn.WriteMessage(websocket.PingMessage, bytes); err != nil {
+				log.Println("error writing ping message", err)
 				return
 			}
 		}
@@ -356,12 +363,6 @@ func broadcast(state *WorldCommunicationState, from *client, bytes []byte) {
 
 	commArea := makeCommArea(from.position.parcel)
 
-	msg, err := websocket.NewPreparedMessage(websocket.BinaryMessage, bytes)
-	if err != nil {
-		log.Println("prepare message error on broadcast", err)
-		return
-	}
-
 	for c := range state.clients {
 		if c == from {
 			continue
@@ -375,6 +376,6 @@ func broadcast(state *WorldCommunicationState, from *client, bytes []byte) {
 			continue
 		}
 
-		c.send <- *msg
+		c.send <- bytes
 	}
 }
