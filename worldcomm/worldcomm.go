@@ -227,6 +227,7 @@ func write(state *WorldCommunicationState, c *client) {
 
 			w, err := c.conn.NextWriter(websocket.BinaryMessage)
 			if err != nil {
+				log.Println("error opening writer", err)
 				return
 			}
 			w.Write(bytes)
@@ -237,6 +238,10 @@ func write(state *WorldCommunicationState, c *client) {
 				w.Write(bytes)
 			}
 
+			if err := w.Close(); err != nil {
+				log.Println("error closing writer", err)
+				return
+			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			bytes := []byte(time.Now().UTC().Format(time.UnixDate))

@@ -38,9 +38,10 @@ func main() {
 		}
 	}
 
-	if worldCommunicationEnabled {
-		initWorldCommunication()
-	}
+	initWorldCommunication()
+
+	log.Println("OK", addr)
+
 	err := http.ListenAndServe(addr, nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
