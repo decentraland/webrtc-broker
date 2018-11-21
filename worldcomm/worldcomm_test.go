@@ -1,8 +1,8 @@
 package worldcomm
 
 import (
-	"io"
 	"errors"
+	"github.com/decentraland/communications-server-go/agent"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -28,9 +28,8 @@ func (ws *MockWebsocket) ReadMessage() (messageType int, p []byte, err error) {
 
 	return websocket.BinaryMessage, nil, errors.New("closed")
 }
-func (ws *MockWebsocket) NextWriter(messageType int) (io.WriteCloser, error) { return nil, nil }
-func (ws *MockWebsocket) WriteMessage(messageType int, bytes []byte) error         { return nil }
-func (ws *MockWebsocket) Close() error                                             { return nil }
+func (ws *MockWebsocket) WriteMessage(messageType int, bytes []byte) error   { return nil }
+func (ws *MockWebsocket) Close() error                                       { return nil }
 
 func makeClientPosition(x float32, z float32) *clientPosition {
 	p := parcel{
@@ -63,7 +62,8 @@ func TestReadToEnqueueMessage(t *testing.T) {
 	msgs := [][]byte{data}
 	conn := &MockWebsocket{messages: msgs}
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	c := makeClient(conn)
 
@@ -78,7 +78,8 @@ func TestReadToEnqueueMessage(t *testing.T) {
 }
 
 func TestProcessMessageToChangeFlowStatus(t *testing.T) {
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	c := makeClient(nil)
 
@@ -106,7 +107,8 @@ func TestProcessMessageToBroadcastChat(t *testing.T) {
 	c2.position = makeClientPosition(0, 0)
 	defer c2.close()
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -142,7 +144,8 @@ func TestProcessMessageToBroadcastProfile(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -180,7 +183,8 @@ func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -223,7 +227,8 @@ func TestBroadcastOutsideCommArea(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -260,7 +265,8 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 
 	state.clients[c1] = true
@@ -284,22 +290,22 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 	require.NoError(b, err)
 
 	go func() {
-	for {
-		select {
-		case _, ok := <-c2.send:
-			if !ok {
-				return
-			}
+		for {
+			select {
+			case _, ok := <-c2.send:
+				if !ok {
+					return
+				}
 
-			n := len(c2.send)
-			for i := 0; i < n; i++ {
-				_ = <- c2.send
+				n := len(c2.send)
+				for i := 0; i < n; i++ {
+					_ = <-c2.send
+				}
 			}
 		}
-	}
 	}()
 
-	b.Run("processMessage loop", func (b *testing.B) {
+	b.Run("processMessage loop", func(b *testing.B) {
 		enqueuedMessage := enqueuedMessage{client: c1, bytes: data, msgType: MessageType_POSITION, ts: ts}
 
 		for i := 0; i < b.N; i++ {
