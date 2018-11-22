@@ -183,6 +183,7 @@ func read(state *WorldCommunicationState, c *client) {
 		// } else {
 		// 	log.Println("cannot parse pong date")
 		// }
+		log.Println("pong SetReadDeadline")
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
