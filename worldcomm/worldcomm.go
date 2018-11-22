@@ -14,8 +14,7 @@ import (
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
-	// pingPeriod     = (pongWait * 9) / 10
-	pingPeriod     = 1 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 1024 // NOTE let's adjust this later
 	commRadius     = 10
 	minParcelX     = -3000
@@ -96,9 +95,11 @@ type IWebsocket interface {
 
 type client struct {
 	conn       IWebsocket
+	peerLocalAlias     uint32
+	nextReadTimeout time.Time
+	peerId     string
 	position   *clientPosition
 	flowStatus FlowStatus
-	peerId     string
 	send       chan []byte
 }
 
@@ -128,6 +129,7 @@ type WorldCommunicationState struct {
 	register   chan *client
 	unregister chan *client
 	metricsContext agent.MetricsContext
+	nextAlias  uint32
 
 	transient struct {
 		positionMessage *PositionMessage
@@ -183,8 +185,10 @@ func read(state *WorldCommunicationState, c *client) {
 		// } else {
 		// 	log.Println("cannot parse pong date")
 		// }
-		log.Println("pong SetReadDeadline")
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		t := time.Now().Add(pongWait)
+		log.Println("pong SetReadDeadline", c.peerLocalAlias, t)
+		c.nextReadTimeout = t
+		c.conn.SetReadDeadline(t)
 		return nil
 	})
 
@@ -196,6 +200,7 @@ func read(state *WorldCommunicationState, c *client) {
 				log.Printf("unexcepted close error: %v", err)
 			}
 			log.Printf("read error: %v", err)
+			log.Println("next read timeout", c.peerLocalAlias, c.nextReadTimeout)
 			break
 		}
 
@@ -274,6 +279,8 @@ func Process(state *WorldCommunicationState) {
 }
 
 func register(state *WorldCommunicationState, c *client) {
+	c.peerLocalAlias = state.nextAlias
+	state.nextAlias += 1
 	state.clients[c] = true
 }
 
