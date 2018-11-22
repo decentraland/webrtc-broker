@@ -242,11 +242,14 @@ func write(state *WorldCommunicationState, c *client) {
 				return
 			}
 			w.Write(bytes)
+			log.Println("writting", len(bytes), "bytes to ", c.peerLocalAlias)
 
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				bytes = <- c.send
 				w.Write(bytes)
+				log.Println("writting", len(bytes), "bytes to ", c.peerLocalAlias)
+
 			}
 
 			if err := w.Close(); err != nil {
