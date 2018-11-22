@@ -14,8 +14,9 @@ import (
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 512 // NOTE let's adjust this later
+	// pingPeriod     = (pongWait * 9) / 10
+	pingPeriod     = 1 * time.Second
+	maxMessageSize = 1024 // NOTE let's adjust this later
 	commRadius     = 10
 	minParcelX     = -3000
 	minParcelZ     = -3000
@@ -177,7 +178,8 @@ func read(state *WorldCommunicationState, c *client) {
 		// t, err := time.Parse(time.UnixDate, s)
 		// if err == nil {
 		// 	d := now.Sub(t)
-		// 	log.Println("avg ping", d / 2, "ping roundtrip:", d)
+		// 	// log.Println("avg ping", d / 2, "ping roundtrip:", d)
+		// 	agent.RecordCustomMetric("Ping", d)
 		// } else {
 		// 	log.Println("cannot parse pong date")
 		// }
