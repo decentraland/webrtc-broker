@@ -4,17 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/decentraland/communications-server-go/worldcomm"
-	newrelic "github.com/newrelic/go-agent"
+	"github.com/decentraland/communications-server-go/agent"
 	"log"
 	"net/http"
 )
 
-const (
-	worldCommunicationEnabled = true
-)
-
-func initWorldCommunication() {
-	state := worldcomm.MakeState()
+func initWorldCommunication(metricsContext agent.MetricsContext) {
+	state := worldcomm.MakeState(metricsContext)
 	go worldcomm.Process(state)
 	http.HandleFunc("/connector", func(w http.ResponseWriter, r *http.Request) {
 		worldcomm.Connect(state, w, r)
@@ -27,23 +23,18 @@ func main() {
 	newrelicApiKey := flag.String("newrelicKey", "", "")
 	flag.Parse()
 
-	log.Println("newrelic", *newrelicApiKey)
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 
-	if *newrelicApiKey != "" {
-		config := newrelic.NewConfig("dcl-comm-server", *newrelicApiKey)
-		_, err := newrelic.NewApplication(config)
-
-		if err != nil {
-			log.Fatal("Cannot initialize new relic: ", err)
-		}
+	metricsContext, err := agent.Initialize(*newrelicApiKey)
+	if err != nil {
+		log.Fatal("Cannot initialize new relic: ", err)
 	}
 
-	initWorldCommunication()
+	initWorldCommunication(metricsContext)
 
-	log.Println("OK", addr)
+	log.Println("starting server", addr)
 
-	err := http.ListenAndServe(addr, nil)
+	err = http.ListenAndServe(addr, nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}

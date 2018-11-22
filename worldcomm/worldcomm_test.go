@@ -3,11 +3,12 @@ package worldcomm
 import (
 	"io"
 	"errors"
+	"testing"
+	"time"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
+	"github.com/decentraland/communications-server-go/agent"
 )
 
 type MockWebsocket struct {
@@ -63,7 +64,8 @@ func TestReadToEnqueueMessage(t *testing.T) {
 	msgs := [][]byte{data}
 	conn := &MockWebsocket{messages: msgs}
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	c := makeClient(conn)
 
@@ -78,7 +80,8 @@ func TestReadToEnqueueMessage(t *testing.T) {
 }
 
 func TestProcessMessageToChangeFlowStatus(t *testing.T) {
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	c := makeClient(nil)
 
@@ -106,7 +109,8 @@ func TestProcessMessageToBroadcastChat(t *testing.T) {
 	c2.position = makeClientPosition(0, 0)
 	defer c2.close()
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -142,7 +146,8 @@ func TestProcessMessageToBroadcastProfile(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -180,7 +185,8 @@ func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -223,7 +229,8 @@ func TestBroadcastOutsideCommArea(t *testing.T) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 	state.clients[c1] = true
 	state.clients[c2] = true
@@ -260,7 +267,8 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 	defer c2.close()
 	c2.position = makeClientPosition(0, 0)
 
-	state := MakeState()
+	metricsContext := agent.MetricsContext{}
+	state := MakeState(metricsContext)
 	defer Close(state)
 
 	state.clients[c1] = true

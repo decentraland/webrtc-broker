@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/decentraland/communications-server-go/agent"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 )
@@ -125,18 +126,20 @@ type WorldCommunicationState struct {
 	queue      chan *enqueuedMessage
 	register   chan *client
 	unregister chan *client
+	metricsContext agent.MetricsContext
 
 	transient struct {
 		positionMessage *PositionMessage
 	}
 }
 
-func MakeState() *WorldCommunicationState {
+func MakeState(metricsContext agent.MetricsContext) *WorldCommunicationState {
 	state := &WorldCommunicationState{
 		clients:    make(map[*client]bool),
 		queue:      make(chan *enqueuedMessage),
 		register:   make(chan *client),
 		unregister: make(chan *client),
+		metricsContext: metricsContext,
 	}
 
 	return state
