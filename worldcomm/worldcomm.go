@@ -173,14 +173,14 @@ func read(state *WorldCommunicationState, c *client) {
 	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(s string) error {
-		now := time.Now().UTC()
-		t, err := time.Parse(time.UnixDate, s)
-		if err == nil {
-			d := now.Sub(t)
-			log.Println("avg ping", d / 2, "ping roundtrip:", d)
-		} else {
-			log.Println("cannot parse pong date")
-		}
+		// now := time.Now().UTC()
+		// t, err := time.Parse(time.UnixDate, s)
+		// if err == nil {
+		// 	d := now.Sub(t)
+		// 	log.Println("avg ping", d / 2, "ping roundtrip:", d)
+		// } else {
+		// 	log.Println("cannot parse pong date")
+		// }
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
@@ -247,7 +247,8 @@ func write(state *WorldCommunicationState, c *client) {
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			bytes := []byte(time.Now().UTC().Format(time.UnixDate))
+			// bytes := []byte(time.Now().UTC().Format(time.UnixDate))
+			bytes := []byte{}
 			if err := c.conn.WriteMessage(websocket.PingMessage, bytes); err != nil {
 				log.Println("error writing ping message", err)
 				return
