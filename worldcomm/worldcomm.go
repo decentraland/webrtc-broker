@@ -192,7 +192,6 @@ func read(state *WorldCommunicationState, c *client) {
 		return nil
 	})
 
-	genericMessage := &GenericMessage{}
 	for {
 		_, bytes, err := c.conn.ReadMessage()
 		if err != nil {
@@ -203,6 +202,7 @@ func read(state *WorldCommunicationState, c *client) {
 			log.Println("next read timeout", c.peerLocalAlias, c.nextReadTimeout)
 			break
 		}
+		genericMessage := &GenericMessage{}
 
 		if err := proto.Unmarshal(bytes, genericMessage); err != nil {
 			log.Println("Failed to load:", err)
@@ -331,9 +331,9 @@ func processMessage(state *WorldCommunicationState, enqueuedMessage *enqueuedMes
 		}
 		broadcast(state, c, bytes)
 	case MessageType_POSITION:
-		if state.transient.positionMessage == nil {
+		// if state.transient.positionMessage == nil {
 			state.transient.positionMessage = &PositionMessage{}
-		}
+		// }
 		message := state.transient.positionMessage
 		if err := proto.Unmarshal(bytes, message); err != nil {
 			log.Println("Failed to decode position message")
