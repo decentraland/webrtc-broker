@@ -10,4 +10,7 @@ fmt:
 bench:
 	go test -bench . github.com/decentraland/communications-server-go/worldcomm
 
+version:
+	git rev-parse HEAD
+
 .PHONY: build test

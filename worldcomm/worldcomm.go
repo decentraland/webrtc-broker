@@ -2,18 +2,18 @@ package worldcomm
 
 import (
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/decentraland/communications-server-go/agent"
+	"github.com/decentraland/communications-server-go/ws"
 	"github.com/golang/protobuf/proto"
-	"github.com/gorilla/websocket"
 )
 
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = 30 * time.Second
+	reportPeriod   = 60 * time.Second
 	maxMessageSize = 512 // NOTE let's adjust this later
 	commRadius     = 10
 	minParcelX     = -3000
@@ -21,12 +21,6 @@ const (
 	maxParcelX     = 3000
 	maxParcelZ     = 3000
 )
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
 
 func max(a int32, b int32) int32 {
 	if a > b {
@@ -78,86 +72,70 @@ type clientPosition struct {
 	lastUpdate time.Time
 }
 
-type IWebsocket interface {
-	SetWriteDeadline(t time.Time) error
-	SetReadDeadline(t time.Time) error
-	SetReadLimit(int64)
-	SetPongHandler(h func(appData string) error)
-
-	ReadMessage() (messageType int, p []byte, err error)
-
-	WriteMessage(messageType int, data []byte) error
-
-	Close() error
-}
-
 type client struct {
-	conn           IWebsocket
-	peerLocalAlias uint32
-	peerId         string
-	position       *clientPosition
-	flowStatus     FlowStatus
-	send           chan []byte
+	conn       ws.IWebsocket
+	alias      uint32
+	peerId     string
+	position   *clientPosition
+	flowStatus FlowStatus
+	send       chan *outMessage
 }
 
-func makeClient(conn IWebsocket) *client {
+func makeClient(conn ws.IWebsocket) *client {
 	return &client{
 		conn:       conn,
 		position:   nil,
 		flowStatus: FlowStatus_UNKNOWN_STATUS,
-		send:       make(chan []byte, 256),
+		send:       make(chan *outMessage, 256),
 	}
 }
 
-func (c *client) close() {
-	close(c.send)
+type inMessage struct {
+	c         *client
+	tReceived time.Time
+	tMsg      time.Time
+	bytes     []byte
 }
 
-type enqueuedMessage struct {
-	client  *client
-	msgType MessageType
-	ts      time.Time
-	bytes   []byte
+type outMessage struct {
+	tReceived time.Time
+	isSystem  bool
+	bytes     []byte
 }
 
-type WorldCommunicationState struct {
-	clients        map[*client]bool
-	queue          chan *enqueuedMessage
-	register       chan *client
-	unregister     chan *client
-	metricsContext agent.MetricsContext
-	nextAlias      uint32
+type worldCommunicationState struct {
+	clients         map[*client]bool
+	pingQueue       chan *inMessage
+	positionQueue   chan *inMessage
+	chatQueue       chan *inMessage
+	profileQueue    chan *inMessage
+	flowStatusQueue chan *inMessage
+	register        chan *client
+	unregister      chan *client
+
+	agent     agent.IAgent
+	nextAlias uint32
 
 	transient struct {
 		positionMessage *PositionMessage
 	}
 }
 
-func MakeState(metricsContext agent.MetricsContext) *WorldCommunicationState {
-	state := &WorldCommunicationState{
-		clients:        make(map[*client]bool),
-		queue:          make(chan *enqueuedMessage),
-		register:       make(chan *client),
-		unregister:     make(chan *client),
-		metricsContext: metricsContext,
+func makeState(agent agent.IAgent) worldCommunicationState {
+	return worldCommunicationState{
+		clients:         make(map[*client]bool),
+		pingQueue:       make(chan *inMessage),
+		positionQueue:   make(chan *inMessage),
+		chatQueue:       make(chan *inMessage),
+		profileQueue:    make(chan *inMessage),
+		flowStatusQueue: make(chan *inMessage),
+		register:        make(chan *client),
+		unregister:      make(chan *client),
+		agent:           agent,
 	}
-
-	return state
 }
 
-func Close(state *WorldCommunicationState) {
-	close(state.queue)
-	close(state.register)
-	close(state.unregister)
-}
-
-func Connect(state *WorldCommunicationState, w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println("socket connect error", err)
-		return
-	}
-
+func connect(state *worldCommunicationState, conn ws.IWebsocket) {
 	log.Println("socket connect")
 	c := makeClient(conn)
 	state.register <- c
@@ -165,7 +143,203 @@ func Connect(state *WorldCommunicationState, w http.ResponseWriter, r *http.Requ
 	go write(state, c)
 }
 
-func read(state *WorldCommunicationState, c *client) {
+func closeState(state *worldCommunicationState) {
+	close(state.pingQueue)
+	close(state.positionQueue)
+	close(state.chatQueue)
+	close(state.profileQueue)
+	close(state.flowStatusQueue)
+	close(state.register)
+	close(state.unregister)
+}
+
+func process(state *worldCommunicationState) {
+	for {
+		processQueues(state)
+	}
+}
+
+func processQueues(state *worldCommunicationState) {
+	ticker := time.NewTicker(reportPeriod)
+	defer func() {
+		ticker.Stop()
+	}()
+
+	select {
+	case c := <-state.register:
+		register(state, c)
+		state.agent.RecordTotalConnections(len(state.clients))
+	case c := <-state.unregister:
+		unregister(state, c)
+		state.agent.RecordTotalConnections(len(state.clients))
+	case <-ticker.C:
+		state.agent.RecordTotalConnections(len(state.clients))
+	case in := <-state.pingQueue:
+		in.c.send <- &outMessage{tReceived: in.tReceived, bytes: in.bytes, isSystem: true}
+		n := len(state.pingQueue)
+		for i := 0; i < n; i++ {
+			in := <-state.pingQueue
+			in.c.send <- &outMessage{tReceived: in.tReceived, bytes: in.bytes, isSystem: true}
+		}
+	case in := <-state.positionQueue:
+		processPositionMessage(state, in)
+		n := len(state.positionQueue)
+		for i := 0; i < n; i++ {
+			in := <-state.positionQueue
+			processPositionMessage(state, in)
+		}
+	case in := <-state.chatQueue:
+		message := &ChatMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode chat message")
+			return
+		}
+
+		size := len(in.bytes)
+		state.agent.RecordRecvChatSize(size)
+		state.agent.RecordRecvSize(size)
+
+		message.Alias = in.c.alias
+		broadcast(state, in.c, in.tReceived, message, false)
+	case in := <-state.profileQueue:
+		message := &ProfileMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode profile message")
+			return
+		}
+
+		size := len(in.bytes)
+		state.agent.RecordRecvProfileSize(size)
+		state.agent.RecordRecvSize(size)
+		c := in.c
+		if c.peerId == "" {
+			c.peerId = message.GetPeerId()
+		}
+
+		message.Alias = c.alias
+		broadcast(state, c, in.tReceived, message, false)
+	case in := <-state.flowStatusQueue:
+		message := &FlowStatusMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode flow status message")
+			return
+		}
+
+		size := len(in.bytes)
+		state.agent.RecordRecvFlowStatusSize(size)
+		state.agent.RecordRecvSize(size)
+
+		flowStatus := message.GetFlowStatus()
+		if flowStatus != FlowStatus_UNKNOWN_STATUS {
+			in.c.flowStatus = flowStatus
+		}
+	}
+}
+
+func register(state *worldCommunicationState, c *client) {
+	c.alias = state.nextAlias
+	state.nextAlias += 1
+	state.clients[c] = true
+}
+
+func unregister(state *worldCommunicationState, c *client) {
+	delete(state.clients, c)
+	close(c.send)
+
+	_, ms := now()
+	msg := &ClientDisconnectedFromServerMessage{
+		Type:  MessageType_CLIENT_DISCONNECTED_FROM_SERVER,
+		Time:  ms,
+		Alias: c.alias,
+	}
+
+	broadcast(state, c, time.Now(), msg, true)
+}
+
+func processPositionMessage(state *worldCommunicationState, in *inMessage) {
+	c := in.c
+	if state.transient.positionMessage == nil {
+		state.transient.positionMessage = &PositionMessage{}
+	}
+	message := state.transient.positionMessage
+	if err := proto.Unmarshal(in.bytes, message); err != nil {
+		log.Println("Failed to decode position message")
+		return
+	}
+
+	if c.position == nil || c.position.lastUpdate.Before(in.tMsg) {
+		if c.position == nil {
+			c.position = &clientPosition{}
+		}
+		c.position.quaternion = [7]float32{
+			message.GetPositionX(),
+			message.GetPositionY(),
+			message.GetPositionZ(),
+			message.GetRotationX(),
+			message.GetRotationY(),
+			message.GetRotationZ(),
+			message.GetRotationW(),
+		}
+		c.position.parcel = parcel{
+			x: int32(message.GetPositionX()),
+			z: int32(message.GetPositionZ()),
+		}
+		c.position.lastUpdate = in.tMsg
+	}
+
+	size := len(in.bytes)
+	state.agent.RecordRecvPositionSize(size)
+	state.agent.RecordRecvSize(size)
+
+	message.Alias = c.alias
+	broadcast(state, c, in.tReceived, message, false)
+}
+
+func broadcast(state *worldCommunicationState, from *client, tReceived time.Time, msg proto.Message, isSystem bool) {
+	if from.position == nil {
+		return
+	}
+
+	t := time.Now()
+
+	bytes, err := proto.Marshal(msg)
+	if err != nil {
+		log.Println("encode message failed", err)
+		return
+	}
+
+	out := &outMessage{
+		tReceived: tReceived,
+		bytes:     bytes,
+		isSystem:  isSystem,
+	}
+
+	commArea := makeCommArea(from.position.parcel)
+
+	for c := range state.clients {
+		if c == from {
+			continue
+		}
+
+		if c.position == nil {
+			continue
+		}
+
+		if c.flowStatus != FlowStatus_OPEN {
+			continue
+		}
+
+		if !commArea.contains(c.position.parcel) {
+			continue
+		}
+
+		c.send <- out
+	}
+
+	state.agent.RecordBroadcastDuration(time.Now().Sub(t))
+}
+
+func read(state *worldCommunicationState, c *client) {
 	defer func() {
 		state.unregister <- c
 		c.conn.Close()
@@ -179,9 +353,9 @@ func read(state *WorldCommunicationState, c *client) {
 
 	genericMessage := &GenericMessage{}
 	for {
-		_, bytes, err := c.conn.ReadMessage()
+		bytes, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			if ws.IsUnexpectedCloseError(err) {
 				log.Printf("unexcepted close error: %v", err)
 			}
 			log.Printf("read error: %v", err)
@@ -198,47 +372,76 @@ func read(state *WorldCommunicationState, c *client) {
 		// 	// TODO
 		// 	continue
 		// }
+		msgType := genericMessage.GetType()
 
-		message := &enqueuedMessage{client: c, msgType: genericMessage.GetType(), ts: ts, bytes: bytes}
-		state.queue <- message
+		in := &inMessage{
+			tReceived: time.Now(),
+			tMsg:      ts,
+			c:         c,
+			bytes:     bytes,
+		}
+
+		switch msgType {
+		case MessageType_FLOW_STATUS:
+			state.flowStatusQueue <- in
+		case MessageType_CHAT:
+			state.chatQueue <- in
+		case MessageType_PING:
+			state.pingQueue <- in
+		case MessageType_POSITION:
+			state.positionQueue <- in
+		case MessageType_PROFILE:
+			state.profileQueue <- in
+		}
 	}
 }
 
-func write(state *WorldCommunicationState, c *client) {
+func write(state *worldCommunicationState, c *client) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
 	}()
 
+	recordEndToEndDuration := func(out *outMessage) {
+		if !out.isSystem {
+			tReceived := out.tReceived
+			d := time.Now().Sub(tReceived)
+			state.agent.RecordEndToEndDuration(d)
+		}
+	}
+
 	for {
 		select {
-		case bytes, ok := <-c.send:
+		case out, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				c.conn.WriteCloseMessage()
 				return
 			}
-
-			err := c.conn.WriteMessage(websocket.BinaryMessage, bytes)
+			err := c.conn.WriteMessage(out.bytes)
 			if err != nil {
 				log.Println("error writing message", err)
 				return
 			}
 
+			state.agent.RecordSentSize(len(out.bytes))
+			recordEndToEndDuration(out)
+
 			n := len(c.send)
 			for i := 0; i < n; i++ {
-				bytes = <-c.send
-				err := c.conn.WriteMessage(websocket.BinaryMessage, bytes)
+				out = <-c.send
+				err := c.conn.WriteMessage(out.bytes)
 				if err != nil {
 					log.Println("error writing message", err)
 					return
 				}
+				state.agent.RecordSentSize(len(out.bytes))
+				recordEndToEndDuration(out)
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			bytes := []byte{}
-			if err := c.conn.WriteMessage(websocket.PingMessage, bytes); err != nil {
+			if err := c.conn.WritePingMessage(); err != nil {
 				log.Println("error writing ping message", err)
 				return
 			}
@@ -246,136 +449,29 @@ func write(state *WorldCommunicationState, c *client) {
 	}
 }
 
-func Process(state *WorldCommunicationState) {
-	for {
-		select {
-		case c := <-state.register:
-			register(state, c)
-		case c := <-state.unregister:
-			unregister(state, c)
-		case enqueuedMessage := <-state.queue:
-			processMessage(state, enqueuedMessage)
-		}
-	}
+type IWorldComm interface {
+	Connect(conn ws.IWebsocket)
+	Process()
+	Close()
 }
 
-func register(state *WorldCommunicationState, c *client) {
-	c.peerLocalAlias = state.nextAlias
-	state.nextAlias += 1
-	state.clients[c] = true
+type worldComm struct {
+	state worldCommunicationState
 }
 
-func unregister(state *WorldCommunicationState, c *client) {
-	delete(state.clients, c)
-	c.close()
-
-	if c.peerId != "" {
-		_, ms := now()
-		msg := &ClientDisconnectedFromServerMessage{
-			Type:   MessageType_CLIENT_DISCONNECTED_FROM_SERVER,
-			Time:   ms,
-			PeerId: c.peerId,
-		}
-		bytes, err := proto.Marshal(msg)
-		if err != nil {
-			log.Println("error sending DISCONNECTED_FROM_SERVER msg", err)
-			return
-		}
-
-		broadcast(state, c, bytes)
-	}
+func (wc *worldComm) Connect(conn ws.IWebsocket) {
+	connect(&wc.state, conn)
 }
 
-func processMessage(state *WorldCommunicationState, enqueuedMessage *enqueuedMessage) {
-	c := enqueuedMessage.client
-	msgTs := enqueuedMessage.ts
-	msgType := enqueuedMessage.msgType
-	bytes := enqueuedMessage.bytes
-
-	switch msgType {
-	case MessageType_FLOW_STATUS:
-		message := &FlowStatusMessage{}
-		if err := proto.Unmarshal(bytes, message); err != nil {
-			log.Println("Failed to decode flow status message")
-			return
-		}
-
-		flowStatus := message.GetFlowStatus()
-		if flowStatus != FlowStatus_UNKNOWN_STATUS {
-			c.flowStatus = flowStatus
-		}
-	case MessageType_CHAT:
-		message := &ChatMessage{}
-		if err := proto.Unmarshal(bytes, message); err != nil {
-			log.Println("Failed to decode chat message")
-			return
-		}
-		broadcast(state, c, bytes)
-	case MessageType_POSITION:
-		if state.transient.positionMessage == nil {
-			state.transient.positionMessage = &PositionMessage{}
-		}
-		message := state.transient.positionMessage
-		if err := proto.Unmarshal(bytes, message); err != nil {
-			log.Println("Failed to decode position message")
-			return
-		}
-
-		if c.position == nil || c.position.lastUpdate.Before(msgTs) {
-			if c.position == nil {
-				c.position = &clientPosition{}
-			}
-			c.position.quaternion = [7]float32{
-				message.GetPositionX(),
-				message.GetPositionY(),
-				message.GetPositionZ(),
-				message.GetRotationX(),
-				message.GetRotationY(),
-				message.GetRotationZ(),
-				message.GetRotationX(),
-			}
-			c.position.parcel = parcel{
-				x: int32(message.GetPositionX()),
-				z: int32(message.GetPositionZ()),
-			}
-			c.position.lastUpdate = msgTs
-		}
-		broadcast(state, c, bytes)
-	case MessageType_PROFILE:
-		message := &ProfileMessage{}
-		if err := proto.Unmarshal(bytes, message); err != nil {
-			log.Println("Failed to decode profile message")
-			return
-		}
-
-		if c.peerId == "" {
-			c.peerId = message.GetPeerId()
-		}
-
-		broadcast(state, c, bytes)
-	}
+func (wc *worldComm) Process() {
+	process(&wc.state)
 }
 
-func broadcast(state *WorldCommunicationState, from *client, bytes []byte) {
-	if from.position == nil {
-		return
-	}
+func (wc *worldComm) Close() {
+	closeState(&wc.state)
+}
 
-	commArea := makeCommArea(from.position.parcel)
-
-	for c := range state.clients {
-		if c == from {
-			continue
-		}
-
-		if c.position == nil {
-			continue
-		}
-
-		if !commArea.contains(c.position.parcel) {
-			continue
-		}
-
-		c.send <- bytes
-	}
+func Make(agent agent.IAgent) IWorldComm {
+	state := makeState(agent)
+	return &worldComm{state: state}
 }
