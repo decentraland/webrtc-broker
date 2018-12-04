@@ -6,12 +6,18 @@ WORKDIR /usr/src/app
 # Install app dependencies
 COPY . .
 
+RUN apt-get update && apt-get install -y \
+    libssl-dev
+
 RUN go get -d -v ./...
+RUN make build
 RUN go install -v ./...
-RUN make test
 
 # DEPLOY STAGE
 FROM golang:1.11.1
+
+RUN apt-get update && apt-get install -y \
+    libssl-dev
 
 WORKDIR /root
 

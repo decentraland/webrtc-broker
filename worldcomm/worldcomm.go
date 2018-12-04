@@ -1,10 +1,12 @@
 package worldcomm
 
 import (
+	"errors"
 	"log"
 	"time"
 
 	"github.com/decentraland/communications-server-go/agent"
+	"github.com/decentraland/communications-server-go/webrtc"
 	"github.com/decentraland/communications-server-go/ws"
 	"github.com/golang/protobuf/proto"
 )
@@ -14,7 +16,7 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = 30 * time.Second
 	reportPeriod   = 60 * time.Second
-	maxMessageSize = 512 // NOTE let's adjust this later
+	maxMessageSize = 1024 // NOTE let's adjust this later
 	commRadius     = 10
 	minParcelX     = -3000
 	minParcelZ     = -3000
@@ -73,12 +75,13 @@ type clientPosition struct {
 }
 
 type client struct {
-	conn       ws.IWebsocket
-	alias      uint32
-	peerId     string
-	position   *clientPosition
-	flowStatus FlowStatus
-	send       chan *outMessage
+	conn             ws.IWebsocket
+	alias            uint32
+	peerId           string
+	position         *clientPosition
+	flowStatus       FlowStatus
+	send             chan *outMessage
+	webRtcConnection *webrtc.Connection
 }
 
 func makeClient(conn ws.IWebsocket) *client {
@@ -98,20 +101,21 @@ type inMessage struct {
 }
 
 type outMessage struct {
-	tReceived time.Time
-	isSystem  bool
+	tryWebRtc bool
+	tReceived *time.Time
 	bytes     []byte
 }
 
 type worldCommunicationState struct {
-	clients         map[*client]bool
-	pingQueue       chan *inMessage
-	positionQueue   chan *inMessage
-	chatQueue       chan *inMessage
-	profileQueue    chan *inMessage
-	flowStatusQueue chan *inMessage
-	register        chan *client
-	unregister      chan *client
+	clients            map[*client]bool
+	pingQueue          chan *inMessage
+	positionQueue      chan *inMessage
+	chatQueue          chan *inMessage
+	profileQueue       chan *inMessage
+	flowStatusQueue    chan *inMessage
+	webRtcSessionQueue chan *inMessage
+	register           chan *client
+	unregister         chan *client
 
 	agent     agent.IAgent
 	nextAlias uint32
@@ -123,15 +127,16 @@ type worldCommunicationState struct {
 
 func makeState(agent agent.IAgent) worldCommunicationState {
 	return worldCommunicationState{
-		clients:         make(map[*client]bool),
-		pingQueue:       make(chan *inMessage),
-		positionQueue:   make(chan *inMessage),
-		chatQueue:       make(chan *inMessage),
-		profileQueue:    make(chan *inMessage),
-		flowStatusQueue: make(chan *inMessage),
-		register:        make(chan *client),
-		unregister:      make(chan *client),
-		agent:           agent,
+		clients:            make(map[*client]bool),
+		pingQueue:          make(chan *inMessage),
+		positionQueue:      make(chan *inMessage),
+		chatQueue:          make(chan *inMessage),
+		profileQueue:       make(chan *inMessage),
+		flowStatusQueue:    make(chan *inMessage),
+		webRtcSessionQueue: make(chan *inMessage),
+		register:           make(chan *client),
+		unregister:         make(chan *client),
+		agent:              agent,
 	}
 }
 
@@ -149,6 +154,7 @@ func closeState(state *worldCommunicationState) {
 	close(state.chatQueue)
 	close(state.profileQueue)
 	close(state.flowStatusQueue)
+	close(state.webRtcSessionQueue)
 	close(state.register)
 	close(state.unregister)
 }
@@ -175,11 +181,11 @@ func processQueues(state *worldCommunicationState) {
 	case <-ticker.C:
 		state.agent.RecordTotalConnections(len(state.clients))
 	case in := <-state.pingQueue:
-		in.c.send <- &outMessage{tReceived: in.tReceived, bytes: in.bytes, isSystem: true}
+		in.c.send <- &outMessage{bytes: in.bytes}
 		n := len(state.pingQueue)
 		for i := 0; i < n; i++ {
 			in := <-state.pingQueue
-			in.c.send <- &outMessage{tReceived: in.tReceived, bytes: in.bytes, isSystem: true}
+			in.c.send <- &outMessage{bytes: in.bytes}
 		}
 	case in := <-state.positionQueue:
 		processPositionMessage(state, in)
@@ -191,8 +197,8 @@ func processQueues(state *worldCommunicationState) {
 	case in := <-state.chatQueue:
 		message := &ChatMessage{}
 		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode chat message")
-			return
+			log.Println("Failed to decode chat message", err)
+			break
 		}
 
 		size := len(in.bytes)
@@ -200,12 +206,17 @@ func processQueues(state *worldCommunicationState) {
 		state.agent.RecordRecvSize(size)
 
 		message.Alias = in.c.alias
-		broadcast(state, in.c, in.tReceived, message, false)
+		out, err := makeOutMessage(&in.tReceived, message)
+		if err != nil {
+			break
+		}
+
+		broadcast(state, in.c, out)
 	case in := <-state.profileQueue:
 		message := &ProfileMessage{}
 		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode profile message")
-			return
+			log.Println("Failed to decode profile message", err)
+			break
 		}
 
 		size := len(in.bytes)
@@ -217,23 +228,24 @@ func processQueues(state *worldCommunicationState) {
 		}
 
 		message.Alias = c.alias
-		broadcast(state, c, in.tReceived, message, false)
-	case in := <-state.flowStatusQueue:
-		message := &FlowStatusMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode flow status message")
+
+		out, err := makeOutMessage(&in.tReceived, message)
+		if err != nil {
 			return
 		}
 
-		size := len(in.bytes)
-		state.agent.RecordRecvFlowStatusSize(size)
-		state.agent.RecordRecvSize(size)
-
-		flowStatus := message.GetFlowStatus()
-		if flowStatus != FlowStatus_UNKNOWN_STATUS {
-			in.c.flowStatus = flowStatus
+		broadcast(state, c, out)
+	case in := <-state.flowStatusQueue:
+		processFlowStatusMessage(state, in)
+	case in := <-state.webRtcSessionQueue:
+		processWebRtcSessionMessage(state, in)
+		n := len(state.webRtcSessionQueue)
+		for i := 0; i < n; i++ {
+			in := <-state.webRtcSessionQueue
+			processWebRtcSessionMessage(state, in)
 		}
 	}
+
 }
 
 func register(state *worldCommunicationState, c *client) {
@@ -246,14 +258,24 @@ func unregister(state *worldCommunicationState, c *client) {
 	delete(state.clients, c)
 	close(c.send)
 
+	if c.webRtcConnection != nil {
+		c.webRtcConnection.Close()
+		c.webRtcConnection = nil
+	}
+
 	_, ms := now()
-	msg := &ClientDisconnectedFromServerMessage{
+	message := &ClientDisconnectedFromServerMessage{
 		Type:  MessageType_CLIENT_DISCONNECTED_FROM_SERVER,
 		Time:  ms,
 		Alias: c.alias,
 	}
 
-	broadcast(state, c, time.Now(), msg, true)
+	out, err := makeOutMessage(nil, message)
+	if err != nil {
+		return
+	}
+
+	broadcast(state, c, out)
 }
 
 func processPositionMessage(state *worldCommunicationState, in *inMessage) {
@@ -263,7 +285,7 @@ func processPositionMessage(state *worldCommunicationState, in *inMessage) {
 	}
 	message := state.transient.positionMessage
 	if err := proto.Unmarshal(in.bytes, message); err != nil {
-		log.Println("Failed to decode position message")
+		log.Println("Failed to decode position message", err)
 		return
 	}
 
@@ -292,27 +314,107 @@ func processPositionMessage(state *worldCommunicationState, in *inMessage) {
 	state.agent.RecordRecvSize(size)
 
 	message.Alias = c.alias
-	broadcast(state, c, in.tReceived, message, false)
-}
 
-func broadcast(state *worldCommunicationState, from *client, tReceived time.Time, msg proto.Message, isSystem bool) {
-	if from.position == nil {
+	out, err := makeOutMessage(&in.tReceived, message)
+	if err != nil {
 		return
 	}
 
-	t := time.Now()
+	out.tryWebRtc = true
+	broadcast(state, c, out)
+}
 
+func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
+	message := &FlowStatusMessage{}
+	if err := proto.Unmarshal(in.bytes, message); err != nil {
+		log.Println("Failed to decode flow status message", err)
+		return
+	}
+
+	size := len(in.bytes)
+	state.agent.RecordRecvFlowStatusSize(size)
+	state.agent.RecordRecvSize(size)
+
+	c := in.c
+
+	flowStatus := message.GetFlowStatus()
+	if flowStatus != FlowStatus_UNKNOWN_STATUS && flowStatus != c.flowStatus {
+		c.flowStatus = flowStatus
+		switch flowStatus {
+		case FlowStatus_OPEN:
+			if c.webRtcConnection != nil {
+				c.webRtcConnection.Close()
+				c.webRtcConnection = nil
+			}
+		case FlowStatus_OPEN_WEBRTC_PREFERRED:
+			if c.webRtcConnection != nil {
+				log.Fatal(errors.New("inconsistent state"))
+			}
+
+			conn, sdp, err := webrtc.NewConnection()
+			if err == nil {
+				c.webRtcConnection = conn
+
+				_, ms := now()
+				msg := &WebRtcSessionMessage{Type: MessageType_WEBRTC_SESSION, Time: ms, Sdp: sdp}
+				bytes, err := proto.Marshal(msg)
+				if err != nil {
+					log.Println("encode message failed", err)
+					return
+				}
+
+				c.send <- &outMessage{bytes: bytes}
+			} else {
+				log.Println("error creating new peer connection", err)
+			}
+		case FlowStatus_CLOSE:
+			if c.webRtcConnection != nil {
+				c.webRtcConnection.Close()
+				c.webRtcConnection = nil
+			}
+		}
+	}
+}
+
+func processWebRtcSessionMessage(state *worldCommunicationState, in *inMessage) {
+	c := in.c
+	message := &WebRtcSessionMessage{}
+	if err := proto.Unmarshal(in.bytes, message); err != nil {
+		log.Println("Failed to decode webrtc session message", err)
+		return
+	}
+
+	size := len(in.bytes)
+	state.agent.RecordRecvWebRtcSessionSize(size)
+	state.agent.RecordRecvSize(size)
+
+	if err := c.webRtcConnection.OnAnswer(message.Sdp); err != nil {
+		log.Println("error setting webrtc answer", err)
+		return
+	}
+}
+
+func makeOutMessage(tReceived *time.Time, msg proto.Message) (*outMessage, error) {
 	bytes, err := proto.Marshal(msg)
 	if err != nil {
 		log.Println("encode message failed", err)
-		return
+		return nil, err
 	}
 
 	out := &outMessage{
 		tReceived: tReceived,
 		bytes:     bytes,
-		isSystem:  isSystem,
 	}
+
+	return out, nil
+}
+
+func broadcast(state *worldCommunicationState, from *client, out *outMessage) {
+	if from.position == nil {
+		return
+	}
+
+	t := time.Now()
 
 	commArea := makeCommArea(from.position.parcel)
 
@@ -325,7 +427,7 @@ func broadcast(state *worldCommunicationState, from *client, tReceived time.Time
 			continue
 		}
 
-		if c.flowStatus != FlowStatus_OPEN {
+		if c.flowStatus != FlowStatus_OPEN && c.flowStatus != FlowStatus_OPEN_WEBRTC_PREFERRED {
 			continue
 		}
 
@@ -336,7 +438,7 @@ func broadcast(state *worldCommunicationState, from *client, tReceived time.Time
 		c.send <- out
 	}
 
-	state.agent.RecordBroadcastDuration(time.Now().Sub(t))
+	state.agent.RecordBroadcastDuration(time.Since(t))
 }
 
 func read(state *worldCommunicationState, c *client) {
@@ -392,6 +494,8 @@ func read(state *worldCommunicationState, c *client) {
 			state.positionQueue <- in
 		case MessageType_PROFILE:
 			state.profileQueue <- in
+		case MessageType_WEBRTC_SESSION:
+			state.webRtcSessionQueue <- in
 		}
 	}
 }
@@ -403,12 +507,23 @@ func write(state *worldCommunicationState, c *client) {
 		c.conn.Close()
 	}()
 
-	recordEndToEndDuration := func(out *outMessage) {
-		if !out.isSystem {
-			tReceived := out.tReceived
-			d := time.Now().Sub(tReceived)
+	writeMessage := func(out *outMessage) error {
+		if out.tryWebRtc && c.webRtcConnection != nil && c.webRtcConnection.Ready {
+			c.webRtcConnection.Write(out.bytes)
+		} else {
+			err := c.conn.WriteMessage(out.bytes)
+			if err != nil {
+				return err
+			}
+		}
+
+		state.agent.RecordSentSize(len(out.bytes))
+		if out.tReceived != nil {
+			d := time.Since(*out.tReceived)
 			state.agent.RecordEndToEndDuration(d)
 		}
+
+		return nil
 	}
 
 	for {
@@ -419,25 +534,18 @@ func write(state *worldCommunicationState, c *client) {
 				c.conn.WriteCloseMessage()
 				return
 			}
-			err := c.conn.WriteMessage(out.bytes)
-			if err != nil {
+			if err := writeMessage(out); err != nil {
 				log.Println("error writing message", err)
 				return
 			}
 
-			state.agent.RecordSentSize(len(out.bytes))
-			recordEndToEndDuration(out)
-
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				out = <-c.send
-				err := c.conn.WriteMessage(out.bytes)
-				if err != nil {
+				if err := writeMessage(out); err != nil {
 					log.Println("error writing message", err)
 					return
 				}
-				state.agent.RecordSentSize(len(out.bytes))
-				recordEndToEndDuration(out)
 			}
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))

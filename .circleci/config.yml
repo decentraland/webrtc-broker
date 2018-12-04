@@ -2,28 +2,10 @@ version: 2
 jobs:
   build:
     docker:
-      - image: circleci/golang:1.11.1
+      - image: docker:stable-git
         environment: &ENVIRONMENT
           DOCKER_IMAGE_NAME: decentraland/communications-server-go
 
-    working_directory: ~/repo
-
-    steps:
-      - checkout
-      - restore_cache:
-          keys:
-            - go-mod-v1-{{ checksum "go.sum" }}
-      - run: go get -v
-      - run: make test
-      - save_cache:
-          key: go-mod-v1-{{ checksum "go.sum" }}
-          paths:
-            - "/go/pkg/mod"
-
-  build-image:
-    docker:
-      - image: circleci/golang:1.11.1
-        environment: *ENVIRONMENT
 
     working_directory: ~/repo
 
@@ -37,13 +19,16 @@ jobs:
           command: docker build -t $DOCKER_IMAGE_NAME:$CIRCLE_SHA1 .
 
       - run:
+          name: Run test
+          command: docker run --rm $DOCKER_IMAGE_NAME:$CIRCLE_SHA1 make test
+
+      - run:
           name: Log in DockerHub
           command: docker login -u "$DOCKER_USER" -p "$DOCKER_PASS"
 
       - run:
           name: Push image
           command: |
-            echo "$CIRCLE_BRANCH"
             if echo "$CIRCLE_BRANCH" | grep "^master$"; then
               docker tag "$DOCKER_IMAGE_NAME:$CIRCLE_SHA1" "$DOCKER_IMAGE_NAME:$CIRCLE_BRANCH"
               docker push "$DOCKER_IMAGE_NAME:$CIRCLE_SHA1"
@@ -62,13 +47,6 @@ workflows:
   build-deploy:
     jobs:
       - build:
-          filters:
-            tags:
-              only: /.*/
-
-      - build-image:
-          requires:
-            - build
           filters:
             tags:
               only: /.*/
