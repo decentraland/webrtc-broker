@@ -16,7 +16,7 @@ type IAgent interface {
 	RecordRecvChatSize(size int)
 	RecordRecvFlowStatusSize(size int)
 	RecordRecvProfileSize(size int)
-	RecordRecvWebRtcSessionSize(size int)
+	RecordRecvWebRtcAnswerSize(size int)
 }
 
 type newrelicAgent struct {
@@ -61,8 +61,8 @@ func (agent *newrelicAgent) RecordRecvProfileSize(size int) {
 	agent.app.RecordCustomMetric("RecvProfileSize[bytes]", float64(size))
 }
 
-func (agent *newrelicAgent) RecordRecvWebRtcSessionSize(size int) {
-	agent.app.RecordCustomMetric("RecvWebRtcSessionSize[bytes]", float64(size))
+func (agent *newrelicAgent) RecordRecvWebRtcAnswerSize(size int) {
+	agent.app.RecordCustomMetric("RecvWebRtcAnswerSize[bytes]", float64(size))
 }
 
 type noopAgent struct{}
@@ -76,7 +76,7 @@ func (_ *noopAgent) RecordRecvPositionSize(size int)         {}
 func (_ *noopAgent) RecordRecvChatSize(size int)             {}
 func (_ *noopAgent) RecordRecvFlowStatusSize(size int)       {}
 func (_ *noopAgent) RecordRecvProfileSize(size int)          {}
-func (_ *noopAgent) RecordRecvWebRtcSessionSize(size int)    {}
+func (_ *noopAgent) RecordRecvWebRtcAnswerSize(size int)     {}
 
 func Make(appName string, newrelicApiKey string) (IAgent, error) {
 	if newrelicApiKey == "" {

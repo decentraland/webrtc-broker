@@ -16,7 +16,7 @@ const (
 	pongWait       = 60 * time.Second
 	pingPeriod     = 30 * time.Second
 	reportPeriod   = 60 * time.Second
-	maxMessageSize = 1024 // NOTE let's adjust this later
+	maxMessageSize = 1536 // NOTE let's adjust this later
 	commRadius     = 10
 	minParcelX     = -3000
 	minParcelZ     = -3000
@@ -94,6 +94,7 @@ func makeClient(conn ws.IWebsocket) *client {
 }
 
 type inMessage struct {
+	msgType   MessageType
 	c         *client
 	tReceived time.Time
 	tMsg      time.Time
@@ -113,7 +114,7 @@ type worldCommunicationState struct {
 	chatQueue          chan *inMessage
 	profileQueue       chan *inMessage
 	flowStatusQueue    chan *inMessage
-	webRtcSessionQueue chan *inMessage
+	webRtcControlQueue chan *inMessage
 	register           chan *client
 	unregister         chan *client
 
@@ -133,7 +134,7 @@ func makeState(agent agent.IAgent) worldCommunicationState {
 		chatQueue:          make(chan *inMessage),
 		profileQueue:       make(chan *inMessage),
 		flowStatusQueue:    make(chan *inMessage),
-		webRtcSessionQueue: make(chan *inMessage),
+		webRtcControlQueue: make(chan *inMessage),
 		register:           make(chan *client),
 		unregister:         make(chan *client),
 		agent:              agent,
@@ -154,7 +155,7 @@ func closeState(state *worldCommunicationState) {
 	close(state.chatQueue)
 	close(state.profileQueue)
 	close(state.flowStatusQueue)
-	close(state.webRtcSessionQueue)
+	close(state.webRtcControlQueue)
 	close(state.register)
 	close(state.unregister)
 }
@@ -237,12 +238,12 @@ func processQueues(state *worldCommunicationState) {
 		broadcast(state, c, out)
 	case in := <-state.flowStatusQueue:
 		processFlowStatusMessage(state, in)
-	case in := <-state.webRtcSessionQueue:
-		processWebRtcSessionMessage(state, in)
-		n := len(state.webRtcSessionQueue)
+	case in := <-state.webRtcControlQueue:
+		processWebRtcControlMessage(state, in)
+		n := len(state.webRtcControlQueue)
 		for i := 0; i < n; i++ {
-			in := <-state.webRtcSessionQueue
-			processWebRtcSessionMessage(state, in)
+			in := <-state.webRtcControlQueue
+			processWebRtcControlMessage(state, in)
 		}
 	}
 
@@ -338,7 +339,7 @@ func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
 	c := in.c
 
 	flowStatus := message.GetFlowStatus()
-	if flowStatus != FlowStatus_UNKNOWN_STATUS && flowStatus != c.flowStatus {
+	if flowStatus != FlowStatus_UNKNOWN_STATUS {
 		c.flowStatus = flowStatus
 		switch flowStatus {
 		case FlowStatus_OPEN:
@@ -348,21 +349,35 @@ func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
 			}
 		case FlowStatus_OPEN_WEBRTC_PREFERRED:
 			if c.webRtcConnection != nil {
-				log.Fatal(errors.New("inconsistent state"))
+				c.webRtcConnection.Close()
+				c.webRtcConnection = nil
 			}
 
-			conn, sdp, err := webrtc.NewConnection()
+			conn, err := webrtc.NewConnection()
 			if err == nil {
 				c.webRtcConnection = conn
 
 				_, ms := now()
-				msg := &WebRtcSessionMessage{Type: MessageType_WEBRTC_SESSION, Time: ms, Sdp: sdp}
+				msg := &WebRtcSupportedMessage{Type: MessageType_WEBRTC_SUPPORTED, Time: ms}
 				bytes, err := proto.Marshal(msg)
 				if err != nil {
-					log.Println("encode message failed", err)
+					log.Println("encode webrtc supported message failed", err)
 					return
 				}
+				c.send <- &outMessage{bytes: bytes}
 
+				_, ms = now()
+				offer, err := c.webRtcConnection.CreateOffer()
+				if err != nil {
+					log.Println("cannot create offer", err)
+					return
+				}
+				offerMsg := &WebRtcOfferMessage{Type: MessageType_WEBRTC_OFFER, Time: ms, Sdp: offer}
+				bytes, err = proto.Marshal(offerMsg)
+				if err != nil {
+					log.Println("encode webrtc offer message failed", err)
+					return
+				}
 				c.send <- &outMessage{bytes: bytes}
 			} else {
 				log.Println("error creating new peer connection", err)
@@ -376,21 +391,59 @@ func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
 	}
 }
 
-func processWebRtcSessionMessage(state *worldCommunicationState, in *inMessage) {
+func processWebRtcControlMessage(state *worldCommunicationState, in *inMessage) {
 	c := in.c
-	message := &WebRtcSessionMessage{}
-	if err := proto.Unmarshal(in.bytes, message); err != nil {
-		log.Println("Failed to decode webrtc session message", err)
-		return
-	}
 
 	size := len(in.bytes)
-	state.agent.RecordRecvWebRtcSessionSize(size)
+	state.agent.RecordRecvWebRtcAnswerSize(size)
 	state.agent.RecordRecvSize(size)
 
-	if err := c.webRtcConnection.OnAnswer(message.Sdp); err != nil {
-		log.Println("error setting webrtc answer", err)
-		return
+	switch in.msgType {
+	case MessageType_WEBRTC_OFFER:
+		message := &WebRtcOfferMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode webrtc offer message", err)
+			return
+		}
+
+		answer, err := c.webRtcConnection.OnOffer(message.Sdp)
+		if err != nil {
+			log.Println("error setting webrtc offer", err)
+			return
+		}
+
+		_, ms := now()
+		msg := &WebRtcAnswerMessage{Type: MessageType_WEBRTC_ANSWER, Time: ms, Sdp: answer}
+		bytes, err := proto.Marshal(msg)
+		if err != nil {
+			log.Println("encode webrtc answer message failed", err)
+			return
+		}
+		c.send <- &outMessage{bytes: bytes}
+	case MessageType_WEBRTC_ANSWER:
+		message := &WebRtcAnswerMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode webrtc answer message", err)
+			return
+		}
+
+		if err := c.webRtcConnection.OnAnswer(message.Sdp); err != nil {
+			log.Println("error setting webrtc answer", err)
+			return
+		}
+	case MessageType_WEBRTC_ICE_CANDIDATE:
+		message := &WebRtcIceCandidateMessage{}
+		if err := proto.Unmarshal(in.bytes, message); err != nil {
+			log.Println("Failed to decode webrtc ice candidate message", err)
+			return
+		}
+
+		if err := c.webRtcConnection.OnIceCandidate(message.Sdp); err != nil {
+			log.Println("error setting webrtc answer", err)
+			return
+		}
+	default:
+		log.Fatal(errors.New("invalid message type in processWebRtcControlMessage"))
 	}
 }
 
@@ -477,6 +530,7 @@ func read(state *worldCommunicationState, c *client) {
 		msgType := genericMessage.GetType()
 
 		in := &inMessage{
+			msgType:   msgType,
 			tReceived: time.Now(),
 			tMsg:      ts,
 			c:         c,
@@ -494,8 +548,14 @@ func read(state *worldCommunicationState, c *client) {
 			state.positionQueue <- in
 		case MessageType_PROFILE:
 			state.profileQueue <- in
-		case MessageType_WEBRTC_SESSION:
-			state.webRtcSessionQueue <- in
+		case MessageType_WEBRTC_OFFER:
+			state.webRtcControlQueue <- in
+		case MessageType_WEBRTC_ANSWER:
+			state.webRtcControlQueue <- in
+		case MessageType_WEBRTC_ICE_CANDIDATE:
+			state.webRtcControlQueue <- in
+		default:
+			log.Println("unhandled message", msgType)
 		}
 	}
 }
