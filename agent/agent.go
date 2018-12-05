@@ -24,7 +24,6 @@ type newrelicAgent struct {
 }
 
 func (agent *newrelicAgent) RecordTotalConnections(total int) {
-	log.Println("total connections", total)
 	agent.app.RecordCustomMetric("TotalConnections[connections]", float64(total))
 }
 
