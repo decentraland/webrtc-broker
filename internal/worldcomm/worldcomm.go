@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/decentraland/communications-server-go/agent"
-	"github.com/decentraland/communications-server-go/webrtc"
-	"github.com/decentraland/communications-server-go/ws"
+	"github.com/decentraland/communications-server-go/internal/agent"
+	"github.com/decentraland/communications-server-go/internal/webrtc"
+	"github.com/decentraland/communications-server-go/internal/ws"
 	"github.com/golang/protobuf/proto"
 )
 
@@ -40,7 +40,7 @@ func min(a int32, b int32) int32 {
 	}
 }
 
-func now() (time.Time, float64) {
+func Now() (time.Time, float64) {
 	now := time.Now()
 	return now, float64(now.UnixNano() / int64(time.Millisecond))
 }
@@ -264,7 +264,7 @@ func unregister(state *worldCommunicationState, c *client) {
 		c.webRtcConnection = nil
 	}
 
-	_, ms := now()
+	_, ms := Now()
 	message := &ClientDisconnectedFromServerMessage{
 		Type:  MessageType_CLIENT_DISCONNECTED_FROM_SERVER,
 		Time:  ms,
@@ -357,7 +357,7 @@ func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
 			if err == nil {
 				c.webRtcConnection = conn
 
-				_, ms := now()
+				_, ms := Now()
 				msg := &WebRtcSupportedMessage{Type: MessageType_WEBRTC_SUPPORTED, Time: ms}
 				bytes, err := proto.Marshal(msg)
 				if err != nil {
@@ -366,7 +366,7 @@ func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
 				}
 				c.send <- &outMessage{bytes: bytes}
 
-				_, ms = now()
+				_, ms = Now()
 				offer, err := c.webRtcConnection.CreateOffer()
 				if err != nil {
 					log.Println("cannot create offer", err)
@@ -412,7 +412,7 @@ func processWebRtcControlMessage(state *worldCommunicationState, in *inMessage) 
 			return
 		}
 
-		_, ms := now()
+		_, ms := Now()
 		msg := &WebRtcAnswerMessage{Type: MessageType_WEBRTC_ANSWER, Time: ms, Sdp: answer}
 		bytes, err := proto.Marshal(msg)
 		if err != nil {

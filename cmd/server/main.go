@@ -3,9 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/decentraland/communications-server-go/agent"
-	"github.com/decentraland/communications-server-go/worldcomm"
-	"github.com/decentraland/communications-server-go/ws"
+	"github.com/decentraland/communications-server-go/internal/agent"
+	"github.com/decentraland/communications-server-go/internal/worldcomm"
+	"github.com/decentraland/communications-server-go/internal/ws"
 	"log"
 	"net/http"
 )

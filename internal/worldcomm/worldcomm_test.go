@@ -2,7 +2,7 @@ package worldcomm
 
 import (
 	"errors"
-	"github.com/decentraland/communications-server-go/agent"
+	"github.com/decentraland/communications-server-go/internal/agent"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -60,7 +60,7 @@ func setupOpenFlowClient(state *worldCommunicationState) (*client, *MockWebsocke
 }
 
 func TestReadToEnqueueMessage(t *testing.T) {
-	_, ms := now()
+	_, ms := Now()
 	msg := &PositionMessage{
 		Type:      MessageType_POSITION,
 		Time:      ms,
@@ -105,7 +105,7 @@ func TestProcessMessageToChangeFlowStatus(t *testing.T) {
 	c := makeClient(nil)
 	defer close(c.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 
 	msg := &FlowStatusMessage{Type: MessageType_FLOW_STATUS, Time: ms, FlowStatus: FlowStatus_OPEN}
 	data, err := proto.Marshal(msg)
@@ -134,7 +134,7 @@ func TestProcessMessageToBroadcastChat(t *testing.T) {
 	c2, _ := setupOpenFlowClient(&state)
 	defer close(c2.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &ChatMessage{
 		Type:      MessageType_CHAT,
 		Time:      ms,
@@ -170,7 +170,7 @@ func TestProcessMessageToBroadcastProfile(t *testing.T) {
 	c2, _ := setupOpenFlowClient(&state)
 	defer close(c2.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &ProfileMessage{
 		Type:        MessageType_PROFILE,
 		Time:        ms,
@@ -208,7 +208,7 @@ func TestProcessMessageToSaveAndBroadcastPosition(t *testing.T) {
 	c2, _ := setupOpenFlowClient(&state)
 	defer close(c2.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &PositionMessage{
 		Type:      MessageType_POSITION,
 		Time:      ms,
@@ -252,7 +252,7 @@ func TestBroadcastOutsideCommArea(t *testing.T) {
 	c2.position = makeClientPosition(20, 0)
 	defer close(c2.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &ChatMessage{
 		Type:      MessageType_CHAT,
 		Time:      ms,
@@ -289,7 +289,7 @@ func TestBroadcastClosedFlow(t *testing.T) {
 	c2, _ := setupClient(&state)
 	defer close(c2.send)
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &ChatMessage{
 		Type:      MessageType_CHAT,
 		Time:      ms,
@@ -346,7 +346,7 @@ func BenchmarkProcessPositionMessage(b *testing.B) {
 		}()
 	}
 
-	ts, ms := now()
+	ts, ms := Now()
 	msg := &PositionMessage{
 		Type:      MessageType_POSITION,
 		Time:      ms,
