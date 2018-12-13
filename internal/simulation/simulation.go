@@ -16,7 +16,7 @@ var AVATARS []string = []string{"fox", "round robot", "square robot"}
 
 const (
 	PARCEL_SIZE = 10
- )
+)
 
 func getRandomAvatar() string {
 	avatar := AVATARS[rand.Intn(len(AVATARS))]
@@ -30,7 +30,7 @@ type V3 struct {
 }
 
 func (v V3) Length() float64 {
-	r := math.Sqrt(math.Pow(float64(v.X), 2) + math.Pow(float64(v.Y),2) + math.Pow(float64(v.Z),2))
+	r := math.Sqrt(math.Pow(float64(v.X), 2) + math.Pow(float64(v.Y), 2) + math.Pow(float64(v.Z), 2))
 	return r
 }
 
