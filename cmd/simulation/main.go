@@ -2,50 +2,60 @@ package main
 
 import (
 	"flag"
-	"github.com/decentraland/communications-server-go/internal/simulation"
 	"log"
 	"math/rand"
+
+	"github.com/decentraland/communications-server-go/internal/authentication"
+	"github.com/decentraland/communications-server-go/internal/simulation"
+	"github.com/pions/webrtc"
 )
 
 type V3 = simulation.V3
 
-func startRndBot(addr string, centerX int, centerY int, radius int) {
-	var checkpoints [6]V3
-
-	for i := 0; i < len(checkpoints); i += 1 {
-		p := &checkpoints[i]
-
-		p.X = float64(centerX + rand.Intn(10)*radius*2 - radius)
-		p.Y = 1.6
-		p.Z = float64(centerY + rand.Intn(10)*radius*2 - radius)
-	}
-
-	opts := simulation.BotOptions{
-		CommServerUrl: addr,
-		Checkpoints:   checkpoints[:],
-		DurationMs:    10000,
-	}
-
-	_, err := simulation.StartBot(opts)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
 func main() {
-	addr := flag.String("commServer", "ws://localhost:9090/connector", "")
-	centerX := flag.Int("centerX", 0, "")
-	centerY := flag.Int("centerY", 0, "")
-	radius := flag.Int("radius", 3, "radius (in parcels) from the center")
-	nBots := flag.Int("n", 5, "number of bots")
+	addrP := flag.String("worldUrl", "ws://localhost:9090/connect", "")
+	centerXP := flag.Int("centerX", 0, "")
+	centerYP := flag.Int("centerY", 0, "")
+	radiusP := flag.Int("radius", 3, "radius (in parcels) from the center")
+	subscribeP := flag.Bool("subscribe", false, "subscribe to the position and profile topics of the comm area")
+	nBotsP := flag.Int("n", 5, "number of bots")
+	authMethodP := flag.String("authMethod", "noop", "")
 
 	flag.Parse()
 
 	log.Println("running random simulation")
 
-	for i := 1; i <= *nBots; i += 1 {
-		startRndBot(*addr, *centerX, *centerY, *radius)
+	webrtc.DetachDataChannels()
+
+	auth := authentication.Make()
+	auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
+
+	addr := *addrP
+	centerX := *centerXP
+	centerY := *centerYP
+	radius := *radiusP
+	subscribe := *subscribeP
+	authMethod := *authMethodP
+	for i := 1; i <= *nBotsP; i += 1 {
+		var checkpoints [6]V3
+
+		for i := 0; i < len(checkpoints); i += 1 {
+			p := &checkpoints[i]
+
+			p.X = float64(centerX + rand.Intn(10)*radius*2 - radius)
+			p.Y = 1.6
+			p.Z = float64(centerY + rand.Intn(10)*radius*2 - radius)
+		}
+
+		opts := simulation.BotOptions{
+			Auth:                      auth,
+			AuthMethod:                authMethod,
+			Checkpoints:               checkpoints[:],
+			DurationMs:                10000,
+			SubscribeToPositionTopics: subscribe,
+		}
+
+		go simulation.StartBot(addr, opts)
 	}
 
 	select {}

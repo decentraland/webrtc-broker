@@ -2,14 +2,17 @@ package simulation
 
 import (
 	"errors"
-	"github.com/decentraland/communications-server-go/internal/worldcomm"
-	"github.com/golang/protobuf/proto"
-	"github.com/gorilla/websocket"
-	"github.com/segmentio/ksuid"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/decentraland/communications-server-go/internal/authentication"
+	"github.com/decentraland/communications-server-go/internal/utils"
+	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/golang/protobuf/proto"
+	"github.com/segmentio/ksuid"
 )
 
 var AVATARS []string = []string{"fox", "round robot", "square robot"}
@@ -52,19 +55,62 @@ func (v V3) Normalize() V3 {
 }
 
 type BotOptions struct {
-	CommServerUrl string
-	Avatar        *string
-	Checkpoints   []V3
-	DurationMs    uint32
+	Auth                      authentication.Authentication
+	AuthMethod                string
+	Id                        string
+	Avatar                    *string
+	Checkpoints               []V3
+	DurationMs                uint
+	SubscribeToPositionTopics bool
 }
 
-type Bot struct {
-	peerId string
+func updateLocationTopics(client *Client, p V3) {
+	radius := 10
+	parcelX := int(p.X / PARCEL_SIZE)
+	parcelZ := int(p.Z / PARCEL_SIZE)
+	minX := utils.Max(-150, parcelX-radius)
+	maxX := utils.Min(150, parcelX+radius)
+	minZ := utils.Max(-150, parcelZ-radius)
+	maxZ := utils.Min(150, parcelZ+radius)
+
+	newTopics := make(map[string]bool)
+
+	for x := minX; x < maxX; x += 1 {
+		for z := minZ; z < maxZ; z += 1 {
+			positionTopic := fmt.Sprintf("position:%d:%d", x, z)
+			newTopics[positionTopic] = true
+			if client.topics[positionTopic] {
+				delete(client.topics, positionTopic)
+			} else {
+				if err := client.sendAddTopicMessage(positionTopic); err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			profileTopic := fmt.Sprintf("profile:%d:%d", x, z)
+			newTopics[profileTopic] = true
+			if client.topics[profileTopic] {
+				delete(client.topics, profileTopic)
+			} else {
+				if err := client.sendAddTopicMessage(profileTopic); err != nil {
+					log.Fatal(err)
+				}
+			}
+		}
+	}
+
+	for topic := range client.topics {
+		if err := client.sendRemoveTopicMessage(topic); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	client.topics = newTopics
 }
 
-func StartBot(options BotOptions) (Bot, error) {
+func StartBot(coordinatorUrl string, options BotOptions) {
 	if len(options.Checkpoints) < 2 {
-		return Bot{}, errors.New("invalid path, need at least two checkpoints")
+		log.Fatal(errors.New("invalid path, need at least two checkpoints"))
 	}
 
 	var avatar string
@@ -76,110 +122,111 @@ func StartBot(options BotOptions) (Bot, error) {
 	}
 
 	peerId := ksuid.New().String()
-	bot := Bot{peerId: peerId}
-
-	checkpoints := options.Checkpoints
+	url, err := options.Auth.GenerateAuthURL(options.AuthMethod, coordinatorUrl, protocol.Role_CLIENT)
+	if err != nil {
+		log.Fatal(err)
+	}
+	client := MakeClient(options.Id, url)
 
 	go func() {
-		c, _, err := websocket.DefaultDialer.Dial(options.CommServerUrl, nil)
-		if err != nil {
-			log.Fatal("dial:", err)
-		}
-
-		defer c.Close()
-
-		totalDistance := 0.0
-		for i := 1; i < len(checkpoints); i += 1 {
-			totalDistance += checkpoints[i].Sub(checkpoints[i-1]).Length()
-		}
-
-		// NOTE: velocity in ms
-		vMs := totalDistance / float64(options.DurationMs)
-
-		p := checkpoints[0]
-		nextCheckpointIndex := 1
-		lastPositionMsg := time.Now()
-
-		profileTicker := time.NewTicker(1 * time.Second)
-		positionTicker := time.NewTicker(100 * time.Millisecond)
-		defer profileTicker.Stop()
-		defer positionTicker.Stop()
-
-		go func() {
-			for {
-				_, message, err := c.ReadMessage()
-				if err != nil {
-					log.Println("read:", err)
-					return
-				}
-				log.Printf("recv: %s", message)
-			}
-		}()
-
-		for {
-
-			select {
-			case <-profileTicker.C:
-				_, ms := worldcomm.Now()
-				msg := &worldcomm.ProfileMessage{
-					Type:        worldcomm.MessageType_PROFILE,
-					Time:        ms,
-					PositionX:   float32(p.X / PARCEL_SIZE),
-					PositionZ:   float32(p.Z / PARCEL_SIZE),
-					PeerId:      peerId,
-					AvatarType:  avatar,
-					DisplayName: peerId,
-				}
-
-				bytes, err := proto.Marshal(msg)
-				if err != nil {
-					log.Fatal("encode profile failed", err)
-				}
-				if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-					log.Fatal("error writing profile message to socket", err)
-				}
-			case <-positionTicker.C:
-				nextCheckpoint := checkpoints[nextCheckpointIndex]
-				v := nextCheckpoint.Sub(p)
-				tMax := float64(v.Length()) / vMs
-				dt := float64(time.Since(lastPositionMsg).Nanoseconds() / int64(time.Millisecond))
-
-				if dt < tMax {
-					dir := v.Normalize()
-					p = p.Add(dir.ScalarProd(dt * vMs))
-				} else {
-					if nextCheckpointIndex == len(checkpoints)-1 {
-						nextCheckpointIndex = 0
-					} else {
-						nextCheckpointIndex += 1
-					}
-					p = nextCheckpoint
-				}
-
-				_, ms := worldcomm.Now()
-				msg := &worldcomm.PositionMessage{
-					Type:      worldcomm.MessageType_POSITION,
-					Time:      ms,
-					PositionX: float32(p.X / PARCEL_SIZE),
-					PositionY: float32(p.Y),
-					PositionZ: float32(p.Z / PARCEL_SIZE),
-					RotationX: 0,
-					RotationY: 0,
-					RotationZ: 0,
-					RotationW: 0,
-				}
-
-				bytes, err := proto.Marshal(msg)
-				if err != nil {
-					log.Fatal("encode position failed", err)
-				}
-				if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-					log.Fatal("error writing position message to socket", err)
-				}
-				lastPositionMsg = time.Now()
-			}
-		}
+		log.Fatal(client.startCoordination())
 	}()
 
-	return bot, nil
+	alias := <-client.alias
+
+	log.Println("my alias is", alias)
+
+	if err := client.startWebRtc(); err != nil {
+		log.Fatal(err)
+	}
+
+	authMessage, err := options.Auth.GenerateAuthMessage(options.AuthMethod, protocol.Role_CLIENT)
+	if err != nil {
+		log.Fatal(err)
+	}
+	bytes, err := proto.Marshal(authMessage)
+	if err != nil {
+		log.Fatal(err)
+	}
+	client.authMessage <- bytes
+	checkpoints := options.Checkpoints
+
+	totalDistance := 0.0
+	for i := 1; i < len(checkpoints); i += 1 {
+		totalDistance += checkpoints[i].Sub(checkpoints[i-1]).Length()
+	}
+
+	// NOTE: velocity in ms
+	vMs := totalDistance / float64(options.DurationMs)
+
+	p := checkpoints[0]
+	nextCheckpointIndex := 1
+	lastPositionMsg := time.Now()
+
+	profileTicker := time.NewTicker(1 * time.Second)
+	positionTicker := time.NewTicker(100 * time.Millisecond)
+	defer profileTicker.Stop()
+	defer positionTicker.Stop()
+
+	for {
+		select {
+		case <-profileTicker.C:
+			parcelX := int(p.X / PARCEL_SIZE)
+			parcelZ := int(p.Z / PARCEL_SIZE)
+			topic := fmt.Sprintf("profile:%d:%d", parcelX, parcelZ)
+
+			ms := utils.NowMs()
+			bytes, err := encodeTopicMessage(topic, &protocol.ProfileData{
+				Time:        ms,
+				AvatarType:  avatar,
+				DisplayName: peerId,
+				PublicKey:   "key",
+			})
+			if err != nil {
+				log.Fatal("encode profile failed", err)
+			}
+			client.sendReliable <- bytes
+		case <-positionTicker.C:
+			nextCheckpoint := checkpoints[nextCheckpointIndex]
+			v := nextCheckpoint.Sub(p)
+			tMax := float64(v.Length()) / vMs
+			dt := float64(time.Since(lastPositionMsg).Nanoseconds() / int64(time.Millisecond))
+
+			if dt < tMax {
+				dir := v.Normalize()
+				p = p.Add(dir.ScalarProd(dt * vMs))
+			} else {
+				if nextCheckpointIndex == len(checkpoints)-1 {
+					nextCheckpointIndex = 0
+				} else {
+					nextCheckpointIndex += 1
+				}
+				p = nextCheckpoint
+			}
+
+			if options.SubscribeToPositionTopics {
+				updateLocationTopics(client, p)
+			}
+
+			parcelX := int(p.X / PARCEL_SIZE)
+			parcelZ := int(p.Z / PARCEL_SIZE)
+			topic := fmt.Sprintf("position:%d:%d", parcelX, parcelZ)
+			ms := utils.NowMs()
+			bytes, err := encodeTopicMessage(topic, &protocol.PositionData{
+				Time:      ms,
+				PositionX: float32(p.X),
+				PositionY: float32(p.Y),
+				PositionZ: float32(p.Z),
+				RotationX: 0,
+				RotationY: 0,
+				RotationZ: 0,
+				RotationW: 0,
+			})
+			if err != nil {
+				log.Fatal("encode position failed", err)
+			}
+			client.sendUnreliable <- bytes
+			lastPositionMsg = time.Now()
+		}
+	}
 }

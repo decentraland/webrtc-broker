@@ -2,644 +2,759 @@ package worldcomm
 
 import (
 	"errors"
-	"log"
 	"time"
 
 	"github.com/decentraland/communications-server-go/internal/agent"
+	"github.com/decentraland/communications-server-go/internal/authentication"
+	"github.com/decentraland/communications-server-go/internal/logging"
 	"github.com/decentraland/communications-server-go/internal/webrtc"
-	"github.com/decentraland/communications-server-go/internal/ws"
-	"github.com/golang/protobuf/proto"
+	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 )
 
 const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = 30 * time.Second
-	reportPeriod   = 60 * time.Second
-	maxMessageSize = 1536 // NOTE let's adjust this later
-	commRadius     = 10
-	minParcelX     = -3000
-	minParcelZ     = -3000
-	maxParcelX     = 3000
-	maxParcelZ     = 3000
+	reportPeriod            = 30 * time.Second
+	maxWorldCommMessageSize = 1024
+	logTopicMessageReceived = false
+	logAddTopic             = false
+	logRemoveTopic          = false
 )
 
-func max(a int32, b int32) int32 {
-	if a > b {
-		return a
-	} else {
-		return b
-	}
+type TopicOp int
+
+const (
+	AddTopic TopicOp = iota + 1
+	RemoveTopic
+)
+
+type topicChange struct {
+	op    TopicOp
+	alias string
+	topic string
 }
 
-func min(a int32, b int32) int32 {
-	if a < b {
-		return a
-	} else {
-		return b
-	}
+type peerMessage struct {
+	fromServer bool
+	reliable   bool
+	topic      string
+	from       string
+	bytes      []byte
 }
 
-func Now() (time.Time, float64) {
-	now := time.Now()
-	return now, float64(now.UnixNano() / int64(time.Millisecond))
+type peer struct {
+	isServer           bool
+	IsAuthenticated    bool
+	authenticationSent bool
+	isClosed           bool
+	alias              string
+	sendReliable       chan []byte
+	sendUnreliable     chan []byte
+	conn               webrtc.IWebRtcConnection
+	Topics             map[string]bool
 }
 
-type parcel struct {
-	x int32
-	z int32
+type PeersIndex = map[string]map[string]bool
+
+type WorldCommunicationState struct {
+	Alias              string
+	authMethod         string
+	Auth               authentication.Authentication
+	marshaller         protocol.IMarshaller
+	log                *logging.Logger
+	webRtc             webrtc.IWebRtc
+	coordinator        *Coordinator
+	Peers              map[string]*peer
+	peersIndex         PeersIndex
+	subscriptions      map[string]bool
+	topicQueue         chan *topicChange
+	connectQueue       chan string
+	webRtcControlQueue chan *protocol.WebRtcMessage
+	messagesQueue      chan *peerMessage
+	unregisterQueue    chan string
+	aliasChannel       chan string
+	stop               chan bool
+	softStop           bool
+	agent              agent.IAgent
 }
 
-type commarea struct {
-	vMin parcel
-	vMax parcel
-}
-
-func (ca *commarea) contains(p parcel) bool {
-	vMin := ca.vMin
-	vMax := ca.vMax
-	return p.x >= vMin.x && p.z >= vMin.z && p.x <= vMax.x && p.z <= vMax.z
-}
-
-func makeCommArea(center parcel) commarea {
-	return commarea{
-		vMin: parcel{max(center.x-commRadius, minParcelX), max(center.z-commRadius, minParcelZ)},
-		vMax: parcel{min(center.x+commRadius, maxParcelX), min(center.z+commRadius, maxParcelZ)},
-	}
-}
-
-type clientPosition struct {
-	quaternion [7]float32
-	parcel     parcel
-	lastUpdate time.Time
-}
-
-type client struct {
-	conn             ws.IWebsocket
-	alias            uint32
-	peerId           string
-	position         *clientPosition
-	flowStatus       FlowStatus
-	send             chan *outMessage
-	webRtcConnection *webrtc.Connection
-}
-
-func makeClient(conn ws.IWebsocket) *client {
-	return &client{
-		conn:       conn,
-		position:   nil,
-		flowStatus: FlowStatus_UNKNOWN_STATUS,
-		send:       make(chan *outMessage, 256),
-	}
-}
-
-type inMessage struct {
-	msgType   MessageType
-	c         *client
-	tReceived time.Time
-	tMsg      time.Time
-	bytes     []byte
-}
-
-type outMessage struct {
-	tryWebRtc bool
-	tReceived *time.Time
-	bytes     []byte
-}
-
-type worldCommunicationState struct {
-	clients            map[*client]bool
-	pingQueue          chan *inMessage
-	positionQueue      chan *inMessage
-	chatQueue          chan *inMessage
-	profileQueue       chan *inMessage
-	flowStatusQueue    chan *inMessage
-	webRtcControlQueue chan *inMessage
-	register           chan *client
-	unregister         chan *client
-
-	agent     agent.IAgent
-	nextAlias uint32
-
-	transient struct {
-		positionMessage *PositionMessage
-	}
-}
-
-func makeState(agent agent.IAgent) worldCommunicationState {
-	return worldCommunicationState{
-		clients:            make(map[*client]bool),
-		pingQueue:          make(chan *inMessage),
-		positionQueue:      make(chan *inMessage),
-		chatQueue:          make(chan *inMessage),
-		profileQueue:       make(chan *inMessage),
-		flowStatusQueue:    make(chan *inMessage),
-		webRtcControlQueue: make(chan *inMessage),
-		register:           make(chan *client),
-		unregister:         make(chan *client),
+func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) WorldCommunicationState {
+	return WorldCommunicationState{
+		authMethod:         authMethod,
+		Auth:               authentication.Make(),
+		marshaller:         &protocol.Marshaller{},
+		log:                logging.New(),
+		webRtc:             &webrtc.WebRtc{},
 		agent:              agent,
+		coordinator:        makeCoordinator(coordinatorUrl),
+		Peers:              make(map[string]*peer),
+		peersIndex:         make(PeersIndex),
+		subscriptions:      make(map[string]bool),
+		stop:               make(chan bool),
+		unregisterQueue:    make(chan string, 255),
+		aliasChannel:       make(chan string),
+		topicQueue:         make(chan *topicChange, 255),
+		connectQueue:       make(chan string, 255),
+		messagesQueue:      make(chan *peerMessage, 255),
+		webRtcControlQueue: make(chan *protocol.WebRtcMessage, 255),
 	}
 }
 
-func connect(state *worldCommunicationState, conn ws.IWebsocket) {
-	log.Println("socket connect")
-	c := makeClient(conn)
-	state.register <- c
-	go read(state, c)
-	go write(state, c)
+func (p *peer) Close() {
+	if !p.isClosed {
+		if p.conn != nil {
+			p.conn.Close()
+		}
+		p.isClosed = true
+	}
 }
 
-func closeState(state *worldCommunicationState) {
-	close(state.pingQueue)
-	close(state.positionQueue)
-	close(state.chatQueue)
-	close(state.profileQueue)
-	close(state.flowStatusQueue)
-	close(state.webRtcControlQueue)
-	close(state.register)
-	close(state.unregister)
+func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, bytes []byte, topicMessage *protocol.TopicMessage) {
+	log := state.log
+	marshaller := state.marshaller
+
+	if err := marshaller.Unmarshal(bytes, topicMessage); err != nil {
+		log.WithError(err).Debug("decode topic message failure")
+		return
+	}
+
+	if logTopicMessageReceived {
+		log.WithFields(logging.Fields{
+			"peer":     p.alias,
+			"reliable": reliable,
+			"topic":    topicMessage.Topic,
+		}).Debug("message received")
+	}
+
+	if p.isServer {
+		msg := &peerMessage{
+			fromServer: true,
+			reliable:   reliable,
+			topic:      topicMessage.Topic,
+			from:       p.alias,
+			bytes:      bytes,
+		}
+
+		state.messagesQueue <- msg
+	} else {
+		topicMessage.FromAlias = p.alias
+		bytes, err := marshaller.Marshal(topicMessage)
+		if err != nil {
+			log.WithError(err).Error("encode topic message failure")
+			return
+		}
+
+		msg := &peerMessage{
+			fromServer: false,
+			reliable:   reliable,
+			topic:      topicMessage.Topic,
+			from:       p.alias,
+			bytes:      bytes,
+		}
+
+		state.messagesQueue <- msg
+	}
 }
 
-func process(state *worldCommunicationState) {
+func (p *peer) readReliablePump(state *WorldCommunicationState) {
+	marshaller := state.marshaller
+	auth := state.Auth
+	log := state.log
+	header := &protocol.WorldCommMessage{}
+	changeTopicMessage := &protocol.ChangeTopicMessage{}
+	topicMessage := &protocol.TopicMessage{}
+
+	buffer := make([]byte, maxWorldCommMessageSize)
+
 	for {
-		processQueues(state)
-	}
-}
+		n, err := p.conn.ReadReliable(buffer)
 
-func processQueues(state *worldCommunicationState) {
-	ticker := time.NewTicker(reportPeriod)
-	defer func() {
-		ticker.Stop()
-	}()
-
-	select {
-	case c := <-state.register:
-		register(state, c)
-		state.agent.RecordTotalConnections(len(state.clients))
-	case c := <-state.unregister:
-		unregister(state, c)
-		state.agent.RecordTotalConnections(len(state.clients))
-	case <-ticker.C:
-		state.agent.RecordTotalConnections(len(state.clients))
-	case in := <-state.pingQueue:
-		in.c.send <- &outMessage{bytes: in.bytes}
-		n := len(state.pingQueue)
-		for i := 0; i < n; i++ {
-			in := <-state.pingQueue
-			in.c.send <- &outMessage{bytes: in.bytes}
-		}
-	case in := <-state.positionQueue:
-		processPositionMessage(state, in)
-		n := len(state.positionQueue)
-		for i := 0; i < n; i++ {
-			in := <-state.positionQueue
-			processPositionMessage(state, in)
-		}
-	case in := <-state.chatQueue:
-		message := &ChatMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode chat message", err)
-			break
-		}
-
-		size := len(in.bytes)
-		state.agent.RecordRecvChatSize(size)
-		state.agent.RecordRecvSize(size)
-
-		message.Alias = in.c.alias
-		out, err := makeOutMessage(&in.tReceived, message)
 		if err != nil {
-			break
-		}
+			log.WithError(err).WithFields(logging.Fields{
+				"peer": p.alias,
+				"id":   state.Alias,
+			}).Info("exit peer.readReliablePump(), datachannel closed")
 
-		broadcast(state, in.c, out)
-	case in := <-state.profileQueue:
-		message := &ProfileMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode profile message", err)
-			break
-		}
-
-		size := len(in.bytes)
-		state.agent.RecordRecvProfileSize(size)
-		state.agent.RecordRecvSize(size)
-		c := in.c
-		if c.peerId == "" {
-			c.peerId = message.GetPeerId()
-		}
-
-		message.Alias = c.alias
-
-		out, err := makeOutMessage(&in.tReceived, message)
-		if err != nil {
+			p.Close()
+			state.unregisterQueue <- p.alias
 			return
 		}
 
-		broadcast(state, c, out)
-	case in := <-state.flowStatusQueue:
-		processFlowStatusMessage(state, in)
-	case in := <-state.webRtcControlQueue:
-		processWebRtcControlMessage(state, in)
-		n := len(state.webRtcControlQueue)
-		for i := 0; i < n; i++ {
-			in := <-state.webRtcControlQueue
-			processWebRtcControlMessage(state, in)
+		if n == 0 {
+			continue
 		}
-	}
 
-}
-
-func register(state *worldCommunicationState, c *client) {
-	c.alias = state.nextAlias
-	state.nextAlias += 1
-	state.clients[c] = true
-}
-
-func unregister(state *worldCommunicationState, c *client) {
-	delete(state.clients, c)
-	close(c.send)
-
-	if c.webRtcConnection != nil {
-		c.webRtcConnection.Close()
-		c.webRtcConnection = nil
-	}
-
-	_, ms := Now()
-	message := &ClientDisconnectedFromServerMessage{
-		Type:  MessageType_CLIENT_DISCONNECTED_FROM_SERVER,
-		Time:  ms,
-		Alias: c.alias,
-	}
-
-	out, err := makeOutMessage(nil, message)
-	if err != nil {
-		return
-	}
-
-	broadcast(state, c, out)
-}
-
-func processPositionMessage(state *worldCommunicationState, in *inMessage) {
-	c := in.c
-	if state.transient.positionMessage == nil {
-		state.transient.positionMessage = &PositionMessage{}
-	}
-	message := state.transient.positionMessage
-	if err := proto.Unmarshal(in.bytes, message); err != nil {
-		log.Println("Failed to decode position message", err)
-		return
-	}
-
-	if c.position == nil || c.position.lastUpdate.Before(in.tMsg) {
-		if c.position == nil {
-			c.position = &clientPosition{}
+		bytes := buffer[:n]
+		if err := marshaller.Unmarshal(bytes, header); err != nil {
+			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
+			continue
 		}
-		c.position.quaternion = [7]float32{
-			message.GetPositionX(),
-			message.GetPositionY(),
-			message.GetPositionZ(),
-			message.GetRotationX(),
-			message.GetRotationY(),
-			message.GetRotationZ(),
-			message.GetRotationW(),
+
+		msgType := header.GetType()
+
+		if !p.IsAuthenticated && msgType != protocol.MessageType_AUTH {
+			log.WithField("peer", p.alias).Debug("closing connection: sending data without authorization")
+			p.Close()
+			break
 		}
-		c.position.parcel = parcel{
-			x: int32(message.GetPositionX()),
-			z: int32(message.GetPositionZ()),
-		}
-		c.position.lastUpdate = in.tMsg
-	}
 
-	size := len(in.bytes)
-	state.agent.RecordRecvPositionSize(size)
-	state.agent.RecordRecvSize(size)
-
-	message.Alias = c.alias
-
-	out, err := makeOutMessage(&in.tReceived, message)
-	if err != nil {
-		return
-	}
-
-	out.tryWebRtc = true
-	broadcast(state, c, out)
-}
-
-func processFlowStatusMessage(state *worldCommunicationState, in *inMessage) {
-	message := &FlowStatusMessage{}
-	if err := proto.Unmarshal(in.bytes, message); err != nil {
-		log.Println("Failed to decode flow status message", err)
-		return
-	}
-
-	size := len(in.bytes)
-	state.agent.RecordRecvFlowStatusSize(size)
-	state.agent.RecordRecvSize(size)
-
-	c := in.c
-
-	flowStatus := message.GetFlowStatus()
-	if flowStatus != FlowStatus_UNKNOWN_STATUS {
-		c.flowStatus = flowStatus
-		switch flowStatus {
-		case FlowStatus_OPEN:
-			if c.webRtcConnection != nil {
-				c.webRtcConnection.Close()
-				c.webRtcConnection = nil
-			}
-		case FlowStatus_OPEN_WEBRTC_PREFERRED:
-			if c.webRtcConnection != nil {
-				c.webRtcConnection.Close()
-				c.webRtcConnection = nil
+		switch msgType {
+		case protocol.MessageType_AUTH:
+			authMessage := &protocol.AuthMessage{}
+			if err := marshaller.Unmarshal(bytes, authMessage); err != nil {
+				log.WithField("peer", p.alias).WithError(err).Debug("decode auth message failure")
+				continue
 			}
 
-			conn, err := webrtc.NewConnection()
-			if err == nil {
-				c.webRtcConnection = conn
+			if authMessage.Role == protocol.Role_UNKNOWN_ROLE {
+				log.WithField("peer", p.alias).WithError(err).Debug("unknown role")
+				continue
+			}
 
-				_, ms := Now()
-				msg := &WebRtcSupportedMessage{Type: MessageType_WEBRTC_SUPPORTED, Time: ms}
-				bytes, err := proto.Marshal(msg)
-				if err != nil {
-					log.Println("encode webrtc supported message failed", err)
-					return
-				}
-				c.send <- &outMessage{bytes: bytes}
+			isValid, err := auth.Authenticate(authMessage.Method, authMessage.Role, authMessage.Body)
+			if err != nil {
+				log.WithField("peer", p.alias).WithError(err).Error("authentication error")
+				p.Close()
+				break
+			}
 
-				_, ms = Now()
-				offer, err := c.webRtcConnection.CreateOffer()
-				if err != nil {
-					log.Println("cannot create offer", err)
-					return
+			if isValid {
+				p.isServer = authMessage.Role == protocol.Role_COMMUNICATION_SERVER
+				p.IsAuthenticated = true
+
+				log.WithFields(logging.Fields{
+					"id":       state.Alias,
+					"peer":     p.alias,
+					"isServer": p.isServer,
+				}).Debug("peer authorized")
+				if p.isServer {
+					if !p.authenticationSent {
+						authMessage, err := state.Auth.GenerateAuthMessage(state.authMethod,
+							protocol.Role_COMMUNICATION_SERVER)
+
+						if err != nil {
+							log.WithError(err).Error("cannot create auth message")
+							continue
+						}
+
+						bytes, err := state.marshaller.Marshal(authMessage)
+						if err != nil {
+							log.WithError(err).Error("cannot encode auth message")
+							return
+						}
+
+						p.sendReliable <- bytes
+					}
+
+					for topic := range state.subscriptions {
+						changeTopicMessage.Type = protocol.MessageType_ADD_TOPIC
+						changeTopicMessage.Topic = topic
+
+						bytes, err := state.marshaller.Marshal(changeTopicMessage)
+						if err != nil {
+							log.WithError(err).Error("encode add topic message failure")
+							p.Close()
+							break
+						}
+
+						p.sendReliable <- bytes
+					}
 				}
-				offerMsg := &WebRtcOfferMessage{Type: MessageType_WEBRTC_OFFER, Time: ms, Sdp: offer}
-				bytes, err = proto.Marshal(offerMsg)
-				if err != nil {
-					log.Println("encode webrtc offer message failed", err)
-					return
-				}
-				c.send <- &outMessage{bytes: bytes}
 			} else {
-				log.Println("error creating new peer connection", err)
+				log.WithField("peer", p.alias).Debug("closing connection: not authorized")
+				p.Close()
+				break
 			}
-		case FlowStatus_CLOSE:
-			if c.webRtcConnection != nil {
-				c.webRtcConnection.Close()
-				c.webRtcConnection = nil
+		case protocol.MessageType_ADD_TOPIC:
+			if err := marshaller.Unmarshal(bytes, changeTopicMessage); err != nil {
+				log.WithField("peer", p.alias).WithError(err).Debug("decode add topic message failure")
+				continue
+			}
+
+			topic := changeTopicMessage.Topic
+
+			if logAddTopic {
+				log.WithFields(logging.Fields{
+					"id":    state.Alias,
+					"peer":  p.alias,
+					"topic": topic,
+				}).Debug("add topic message")
+			}
+
+			state.topicQueue <- &topicChange{op: AddTopic, alias: p.alias, topic: topic}
+		case protocol.MessageType_REMOVE_TOPIC:
+			if err := marshaller.Unmarshal(bytes, changeTopicMessage); err != nil {
+				log.WithError(err).Debug("decode remove topic message failure")
+				continue
+			}
+			topic := changeTopicMessage.Topic
+			if logRemoveTopic {
+				log.WithFields(logging.Fields{
+					"id":    state.Alias,
+					"peer":  p.alias,
+					"topic": topic,
+				}).Debug("remove topic message")
+			}
+			state.topicQueue <- &topicChange{op: RemoveTopic, alias: p.alias, topic: topic}
+		case protocol.MessageType_TOPIC:
+			readPeerMessage(state, p, true, bytes, topicMessage)
+		case protocol.MessageType_PING:
+			p.sendUnreliable <- bytes
+		default:
+			log.WithField("type", msgType).Debug("unhandled reliable message from peer")
+		}
+	}
+
+}
+
+func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
+	marshaller := state.marshaller
+	log := state.log
+	header := &protocol.WorldCommMessage{}
+	topicMessage := &protocol.TopicMessage{}
+
+	buffer := make([]byte, maxWorldCommMessageSize)
+	for {
+		n, err := p.conn.ReadUnreliable(buffer)
+
+		if err != nil {
+			log.WithError(err).WithFields(logging.Fields{
+				"peer": p.alias,
+				"id":   state.Alias,
+			}).Info("exit peer.readUnreliablePump(), datachannel closed")
+
+			p.Close()
+			state.unregisterQueue <- p.alias
+			return
+		}
+
+		if n == 0 {
+			continue
+		}
+
+		bytes := buffer[:n]
+		if err := marshaller.Unmarshal(bytes, header); err != nil {
+			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
+			continue
+		}
+
+		msgType := header.GetType()
+
+		if !p.IsAuthenticated && msgType != protocol.MessageType_AUTH {
+			log.WithField("peer", p.alias).Debug("closing connection: sending data without authorization")
+			p.Close()
+			return
+		}
+
+		switch msgType {
+		case protocol.MessageType_TOPIC:
+			readPeerMessage(state, p, false, bytes, topicMessage)
+		case protocol.MessageType_PING:
+			p.sendUnreliable <- bytes
+		default:
+			log.WithField("type", msgType).Debug("unhandled unreliable message from peer")
+		}
+	}
+}
+
+func (p *peer) writePump(state *WorldCommunicationState) {
+	defer func() {
+		p.Close()
+	}()
+	log := state.log
+	for {
+		select {
+		case bytes, ok := <-p.sendReliable:
+			if !ok {
+				log.WithFields(logging.Fields{
+					"peer": p.alias,
+					"id":   state.Alias,
+				}).Info("exit peer.writePump(), sendReliable channel closed")
+				return
+			}
+
+			if err := p.conn.WriteReliable(bytes); err != nil {
+				log.WithField("peer", p.alias).WithError(err).Error("error writing message")
+				return
+			}
+
+			state.agent.RecordSentSize(len(bytes))
+			n := len(p.sendReliable)
+			for i := 0; i < n; i++ {
+				bytes = <-p.sendReliable
+				if err := p.conn.WriteReliable(bytes); err != nil {
+					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
+					return
+				}
+				state.agent.RecordSentSize(len(bytes))
+			}
+		case bytes, ok := <-p.sendUnreliable:
+			if !ok {
+				log.WithFields(logging.Fields{
+					"peer": p.alias,
+					"id":   state.Alias,
+				}).Info("exit peer.writePump(), sendUnreliable channel closed")
+				return
+			}
+
+			if err := p.conn.WriteUnreliable(bytes); err != nil {
+				log.WithField("peer", p.alias).WithError(err).Error("error writing message")
+				return
+			}
+
+			state.agent.RecordSentSize(len(bytes))
+			n := len(p.sendUnreliable)
+			for i := 0; i < n; i++ {
+				bytes = <-p.sendUnreliable
+				if err := p.conn.WriteUnreliable(bytes); err != nil {
+					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
+					return
+				}
+				state.agent.RecordSentSize(len(bytes))
 			}
 		}
 	}
 }
 
-func processWebRtcControlMessage(state *worldCommunicationState, in *inMessage) {
-	c := in.c
+func ConnectCoordinator(state *WorldCommunicationState) error {
+	c := state.coordinator
+	if err := c.Connect(state, state.authMethod); err != nil {
+		return err
+	}
 
-	size := len(in.bytes)
-	state.agent.RecordRecvWebRtcAnswerSize(size)
-	state.agent.RecordRecvSize(size)
+	go c.readPump(state)
+	go c.writePump(state)
 
-	switch in.msgType {
-	case MessageType_WEBRTC_OFFER:
-		message := &WebRtcOfferMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode webrtc offer message", err)
+	state.Alias = <-state.aliasChannel
+
+	return nil
+}
+
+func closeState(state *WorldCommunicationState) {
+	state.coordinator.Close()
+	close(state.webRtcControlQueue)
+	close(state.connectQueue)
+	close(state.topicQueue)
+	close(state.messagesQueue)
+	close(state.unregisterQueue)
+	close(state.stop)
+}
+
+func Process(state *WorldCommunicationState) {
+	ticker := time.NewTicker(reportPeriod)
+	defer ticker.Stop()
+
+	log := state.log
+	for {
+		select {
+		case alias := <-state.connectQueue:
+			processConnect(state, alias)
+			n := len(state.connectQueue)
+			for i := 0; i < n; i++ {
+				alias := <-state.connectQueue
+				processConnect(state, alias)
+			}
+		case change := <-state.topicQueue:
+			processTopicChange(state, change)
+			n := len(state.topicQueue)
+			for i := 0; i < n; i++ {
+				change := <-state.topicQueue
+				processTopicChange(state, change)
+			}
+		case alias := <-state.unregisterQueue:
+			processUnregister(state, alias)
+			n := len(state.unregisterQueue)
+			for i := 0; i < n; i++ {
+				alias = <-state.unregisterQueue
+				processUnregister(state, alias)
+			}
+		case webRtcMessage := <-state.webRtcControlQueue:
+			processWebRtcControlMessage(state, webRtcMessage)
+			n := len(state.webRtcControlQueue)
+			for i := 0; i < n; i++ {
+				webRtcMessage = <-state.webRtcControlQueue
+				processWebRtcControlMessage(state, webRtcMessage)
+			}
+		case msg := <-state.messagesQueue:
+			processPeerMessage(state, msg)
+			n := len(state.messagesQueue)
+			for i := 0; i < n; i++ {
+				msg = <-state.messagesQueue
+				processPeerMessage(state, msg)
+			}
+		case <-ticker.C:
+			state.agent.RecordTotalConnections(len(state.Peers))
+
+			log.WithFields(logging.Fields{
+				"peers count":  len(state.Peers),
+				"topics count": len(state.subscriptions),
+			}).Debug("report")
+
+		case <-state.stop:
+			log.Debug("hard stop signal")
 			return
 		}
 
-		answer, err := c.webRtcConnection.OnOffer(message.Sdp)
+		// NOTE: I'm using this for testing only, but if it makes sense to fully support it
+		// we may want to add a timeout (with a timer), otherwise this will executed only
+		// if the previous select exited
+		if state.softStop {
+			log.Debug("soft stop signal")
+			return
+		}
+	}
+}
+
+func initPeer(state *WorldCommunicationState, alias string) (*peer, error) {
+	log := state.log
+	log.WithFields(logging.Fields{
+		"peer": alias,
+		"id":   state.Alias,
+	}).Debug("init peer")
+	conn, err := state.webRtc.NewConnection()
+
+	if err != nil {
+		log.WithError(err).Error("error creating new peer connection")
+		return nil, err
+	}
+
+	p := &peer{
+		sendReliable:   make(chan []byte, 256),
+		sendUnreliable: make(chan []byte, 256),
+		alias:          alias,
+		conn:           conn,
+		Topics:         make(map[string]bool),
+	}
+	state.Peers[alias] = p
+
+	conn.OnReliableChannelOpen(func() {
+		go p.writePump(state)
+		go p.readReliablePump(state)
+	})
+
+	conn.OnUnreliableChannelOpen(func() {
+		go p.readUnreliablePump(state)
+	})
+
+	return p, nil
+}
+
+func processUnregister(state *WorldCommunicationState, alias string) {
+	log := state.log
+	p := state.Peers[alias]
+	if p != nil {
+		log.WithField("peer", alias).Debug("unregister peer")
+		delete(state.Peers, alias)
+
+		close(p.sendReliable)
+		close(p.sendUnreliable)
+
+		for topic := range p.Topics {
+			peers := state.peersIndex[topic]
+			if peers != nil {
+				delete(peers, alias)
+			}
+
+			// NOTE if a client is unsubscribe for a topic,
+			// check if there is at least one other client subscription,
+			// if not, cancel it.
+			if !p.isServer && state.subscriptions[topic] {
+				shouldRemoveTopic := true
+
+				for alias := range peers {
+					p := state.Peers[alias]
+
+					if !p.isServer {
+						shouldRemoveTopic = false
+						break
+					}
+				}
+
+				if shouldRemoveTopic {
+					broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
+					delete(state.subscriptions, topic)
+				}
+			}
+		}
+	}
+}
+
+func processConnect(state *WorldCommunicationState, alias string) error {
+	log := state.log
+
+	processUnregister(state, alias)
+
+	p, err := initPeer(state, alias)
+	if err != nil {
+		return err
+	}
+
+	offer, err := p.conn.CreateOffer()
+	if err != nil {
+		log.WithField("peer", alias).WithError(err).Error("cannot create offer")
+		return err
+	}
+
+	state.coordinator.Send(state, &protocol.WebRtcMessage{
+		Type:    protocol.MessageType_WEBRTC_OFFER,
+		Sdp:     offer,
+		ToAlias: alias,
+	})
+	return nil
+}
+
+func processTopicChange(state *WorldCommunicationState, change *topicChange) {
+	alias := change.alias
+	topic := change.topic
+
+	p := state.Peers[alias]
+
+	if p == nil {
+		return
+	}
+
+	peers := state.peersIndex[topic]
+
+	if peers == nil {
+		peers = make(map[string]bool)
+		state.peersIndex[topic] = peers
+	}
+
+	if change.op == AddTopic {
+		peers[alias] = true
+		p.Topics[topic] = true
+		if !p.isServer && !state.subscriptions[topic] {
+			broadcastTopicChange(state, protocol.MessageType_ADD_TOPIC, topic)
+			state.subscriptions[topic] = true
+		}
+	} else {
+		delete(peers, alias)
+		delete(p.Topics, topic)
+
+		// NOTE if a client is unsubscribe for a topic, check if there is at least one other client subscription,
+		// if not, cancel it.
+		if !p.isServer && state.subscriptions[topic] {
+			shouldRemoveTopic := true
+
+			for alias := range peers {
+				p := state.Peers[alias]
+
+				if !p.isServer {
+					shouldRemoveTopic = false
+					break
+				}
+			}
+
+			if shouldRemoveTopic {
+				broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
+				delete(state.subscriptions, topic)
+			}
+		}
+	}
+}
+
+func processWebRtcControlMessage(state *WorldCommunicationState, webRtcMessage *protocol.WebRtcMessage) error {
+	log := state.log
+
+	alias := webRtcMessage.FromAlias
+	p := state.Peers[alias]
+	if p == nil {
+		np, err := initPeer(state, alias)
 		if err != nil {
-			log.Println("error setting webrtc offer", err)
-			return
+			return err
 		}
+		p = np
+	}
 
-		_, ms := Now()
-		msg := &WebRtcAnswerMessage{Type: MessageType_WEBRTC_ANSWER, Time: ms, Sdp: answer}
-		bytes, err := proto.Marshal(msg)
+	switch webRtcMessage.Type {
+	case protocol.MessageType_WEBRTC_OFFER:
+		log.WithFields(logging.Fields{
+			"id":   state.Alias,
+			"peer": p.alias,
+		}).Debug("webrtc offer received")
+		answer, err := p.conn.OnOffer(webRtcMessage.Sdp)
 		if err != nil {
-			log.Println("encode webrtc answer message failed", err)
-			return
-		}
-		c.send <- &outMessage{bytes: bytes}
-	case MessageType_WEBRTC_ANSWER:
-		message := &WebRtcAnswerMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode webrtc answer message", err)
-			return
+			log.WithError(err).Error("error setting webrtc offer")
+			return err
 		}
 
-		if err := c.webRtcConnection.OnAnswer(message.Sdp); err != nil {
-			log.Println("error setting webrtc answer", err)
-			return
+		state.coordinator.Send(state, &protocol.WebRtcMessage{
+			Type:    protocol.MessageType_WEBRTC_ANSWER,
+			Sdp:     answer,
+			ToAlias: p.alias,
+		})
+	case protocol.MessageType_WEBRTC_ANSWER:
+		log.WithFields(logging.Fields{
+			"id":   state.Alias,
+			"peer": p.alias,
+		}).Debug("webrtc answer received")
+		if err := p.conn.OnAnswer(webRtcMessage.Sdp); err != nil {
+			log.WithError(err).Error("error setting webrtc answer")
+			return err
 		}
-	case MessageType_WEBRTC_ICE_CANDIDATE:
-		message := &WebRtcIceCandidateMessage{}
-		if err := proto.Unmarshal(in.bytes, message); err != nil {
-			log.Println("Failed to decode webrtc ice candidate message", err)
-			return
-		}
-
-		if err := c.webRtcConnection.OnIceCandidate(message.Sdp); err != nil {
-			log.Println("error setting webrtc answer", err)
-			return
+	case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
+		log.WithFields(logging.Fields{
+			"id":   state.Alias,
+			"peer": p.alias,
+		}).Debug("ice candidate received")
+		if err := p.conn.OnIceCandidate(webRtcMessage.Sdp); err != nil {
+			log.WithError(err).Error("error adding remote ice candidate")
+			return err
 		}
 	default:
 		log.Fatal(errors.New("invalid message type in processWebRtcControlMessage"))
 	}
+
+	return nil
 }
 
-func makeOutMessage(tReceived *time.Time, msg proto.Message) (*outMessage, error) {
-	bytes, err := proto.Marshal(msg)
-	if err != nil {
-		log.Println("encode message failed", err)
-		return nil, err
-	}
-
-	out := &outMessage{
-		tReceived: tReceived,
-		bytes:     bytes,
-	}
-
-	return out, nil
-}
-
-func broadcast(state *worldCommunicationState, from *client, out *outMessage) {
-	if from.position == nil {
+func processPeerMessage(state *WorldCommunicationState, msg *peerMessage) {
+	peers := state.peersIndex[msg.topic]
+	if peers == nil {
 		return
 	}
 
-	t := time.Now()
+	for alias := range peers {
+		if alias != msg.from {
+			p := state.Peers[alias]
 
-	commArea := makeCommArea(from.position.parcel)
-
-	for c := range state.clients {
-		if c == from {
-			continue
-		}
-
-		if c.position == nil {
-			continue
-		}
-
-		if c.flowStatus != FlowStatus_OPEN && c.flowStatus != FlowStatus_OPEN_WEBRTC_PREFERRED {
-			continue
-		}
-
-		if !commArea.contains(c.position.parcel) {
-			continue
-		}
-
-		c.send <- out
-	}
-
-	state.agent.RecordBroadcastDuration(time.Since(t))
-}
-
-func read(state *worldCommunicationState, c *client) {
-	defer func() {
-		state.unregister <- c
-		c.conn.Close()
-	}()
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(s string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-
-	genericMessage := &GenericMessage{}
-	for {
-		bytes, err := c.conn.ReadMessage()
-		if err != nil {
-			if ws.IsUnexpectedCloseError(err) {
-				log.Printf("unexcepted close error: %v", err)
-			}
-			log.Printf("read error: %v", err)
-			break
-		}
-
-		if err := proto.Unmarshal(bytes, genericMessage); err != nil {
-			log.Println("Failed to load:", err)
-			continue
-		}
-
-		ts := time.Unix(0, int64(genericMessage.GetTime())*int64(time.Millisecond))
-		// if ts.After(time.Now()) {
-		// 	// TODO
-		// 	continue
-		// }
-		msgType := genericMessage.GetType()
-
-		in := &inMessage{
-			msgType:   msgType,
-			tReceived: time.Now(),
-			tMsg:      ts,
-			c:         c,
-			bytes:     bytes,
-		}
-
-		switch msgType {
-		case MessageType_FLOW_STATUS:
-			state.flowStatusQueue <- in
-		case MessageType_CHAT:
-			state.chatQueue <- in
-		case MessageType_PING:
-			state.pingQueue <- in
-		case MessageType_POSITION:
-			state.positionQueue <- in
-		case MessageType_PROFILE:
-			state.profileQueue <- in
-		case MessageType_WEBRTC_OFFER:
-			state.webRtcControlQueue <- in
-		case MessageType_WEBRTC_ANSWER:
-			state.webRtcControlQueue <- in
-		case MessageType_WEBRTC_ICE_CANDIDATE:
-			state.webRtcControlQueue <- in
-		default:
-			log.Println("unhandled message", msgType)
-		}
-	}
-}
-
-func write(state *worldCommunicationState, c *client) {
-	ticker := time.NewTicker(pingPeriod)
-	defer func() {
-		ticker.Stop()
-		c.conn.Close()
-	}()
-
-	writeMessage := func(out *outMessage) error {
-		if out.tryWebRtc && c.webRtcConnection != nil && c.webRtcConnection.Ready {
-			c.webRtcConnection.Write(out.bytes)
-		} else {
-			err := c.conn.WriteMessage(out.bytes)
-			if err != nil {
-				return err
-			}
-		}
-
-		state.agent.RecordSentSize(len(out.bytes))
-		if out.tReceived != nil {
-			d := time.Since(*out.tReceived)
-			state.agent.RecordEndToEndDuration(d)
-		}
-
-		return nil
-	}
-
-	for {
-		select {
-		case out, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				c.conn.WriteCloseMessage()
-				return
-			}
-			if err := writeMessage(out); err != nil {
-				log.Println("error writing message", err)
-				return
+			if p == nil || p.isClosed {
+				continue
 			}
 
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				out = <-c.send
-				if err := writeMessage(out); err != nil {
-					log.Println("error writing message", err)
-					return
-				}
+			if msg.fromServer && p.isServer {
+				continue
 			}
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.conn.WritePingMessage(); err != nil {
-				log.Println("error writing ping message", err)
-				return
+
+			if msg.reliable {
+				p.sendReliable <- msg.bytes
+			} else {
+				p.sendUnreliable <- msg.bytes
 			}
 		}
 	}
 }
 
-type IWorldComm interface {
-	Connect(conn ws.IWebsocket)
-	Process()
-	Close()
-}
+func broadcastTopicChange(state *WorldCommunicationState, msgType protocol.MessageType, topic string) error {
+	log := state.log
+	changeTopicMessage := &protocol.ChangeTopicMessage{
+		Type:  msgType,
+		Topic: topic,
+	}
 
-type worldComm struct {
-	state worldCommunicationState
-}
+	bytes, err := state.marshaller.Marshal(changeTopicMessage)
+	if err != nil {
+		log.WithError(err).Error("encode change topic message failure")
+		return err
+	}
 
-func (wc *worldComm) Connect(conn ws.IWebsocket) {
-	connect(&wc.state, conn)
-}
+	for _, p := range state.Peers {
+		if p.isServer {
+			log.WithFields(logging.Fields{
+				"id":   state.Alias,
+				"peer": p.alias,
+			}).Debug("send topic change (to server)")
+			p.sendReliable <- bytes
+		}
+	}
 
-func (wc *worldComm) Process() {
-	process(&wc.state)
-}
-
-func (wc *worldComm) Close() {
-	closeState(&wc.state)
-}
-
-func Make(agent agent.IAgent) IWorldComm {
-	state := makeState(agent)
-	return &worldComm{state: state}
+	return nil
 }

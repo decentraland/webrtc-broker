@@ -84,6 +84,16 @@ func IsUnexpectedCloseError(err error) bool {
 	return _websocket.IsUnexpectedCloseError(err, _websocket.CloseGoingAway, _websocket.CloseAbnormalClosure)
 }
 
+func Dial(url string) (IWebsocket, error) {
+	conn, _, err := _websocket.DefaultDialer.Dial(url, nil)
+
+	if err != nil {
+		return &websocket{}, err
+	}
+
+	return &websocket{conn: conn}, nil
+}
+
 func MakeUpgrader() IUpgrader {
 	upgrader := _websocket.Upgrader{
 		ReadBufferSize:  1024,

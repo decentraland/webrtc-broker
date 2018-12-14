@@ -1,9 +1,10 @@
 package agent
 
 import (
-	newrelic "github.com/newrelic/go-agent"
 	"log"
 	"time"
+
+	newrelic "github.com/newrelic/go-agent"
 )
 
 type IAgent interface {

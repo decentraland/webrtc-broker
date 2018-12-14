@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+enum MessageType {
+  UNKNOWN_MESSAGE_TYPE = 0;
+  WELCOME_SERVER = 1;
+  WELCOME_CLIENT = 2;
+  CONNECT = 3;
+  WEBRTC_SUPPORTED = 4;
+  WEBRTC_OFFER = 5;
+  WEBRTC_ANSWER = 6;
+  WEBRTC_ICE_CANDIDATE = 7;
+  PING = 8;
+  ADD_TOPIC = 9;
+  REMOVE_TOPIC = 10;
+  TOPIC = 11;
+  AUTH = 12;
+}
+
+enum Role {
+  UNKNOWN_ROLE = 0;
+  CLIENT = 1;
+  COMMUNICATION_SERVER = 2;
+}
+
+// NOTE: coordination messsages
+
+message CoordinatorMessage {
+    MessageType type = 1;
+}
+
+message WelcomeServerMessage {
+    MessageType type = 1;
+    string alias = 2;
+    repeated string peers = 3;
+}
+
+message WelcomeClientMessage {
+    MessageType type = 1;
+    string alias = 2;
+}
+
+message ConnectMessage {
+    MessageType type = 1;
+    string from_alias = 2;
+    string to_alias = 3;
+}
+
+message WebRtcMessage {
+    MessageType type = 1;
+    string from_alias = 2;
+    string to_alias = 3;
+    string sdp = 4;
+}
+
+// NOTE: world comm messsages
+
+message WorldCommMessage {
+    MessageType type = 1;
+}
+
+message PingMessage {
+    MessageType type = 1;
+    double time = 2;
+}
+
+message ChangeTopicMessage {
+    MessageType type = 1;
+    string topic = 2;
+}
+
+message TopicMessage {
+    MessageType type = 1;
+    string topic = 3;
+    string from_alias = 4;
+    bytes body = 5;
+}
+
+message AuthMessage {
+    MessageType type = 1;
+    Role role = 2;
+    string method = 3;
+    bytes body = 4;
+}
+
+// NOTE: serialization data
+
+message PositionData {
+    double time = 1;
+    float position_x = 2;
+    float position_y = 3;
+    float position_z = 4;
+    float rotation_x = 5;
+    float rotation_y = 6;
+    float rotation_z = 7;
+    float rotation_w = 8;
+}
+
+message ProfileData {
+    double time = 1;
+    string avatar_type = 2;
+    string display_name = 3;
+    string public_key = 4;
+}
+
+message ChatData {
+    double time = 1;
+    string message_id = 2;
+    string text = 3;
+}
