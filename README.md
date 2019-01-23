@@ -2,6 +2,8 @@
 
 ## Components
 
+![](docs/diagram.png?raw=true)
+
 ### Clients
 
 The whole point of this system is to provide connectivity to the clients. The clients connect to a single communication server after credentials negotiation with the Coordinator Server.
