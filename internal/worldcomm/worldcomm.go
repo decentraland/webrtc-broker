@@ -73,7 +73,7 @@ type WorldCommunicationState struct {
 	aliasChannel       chan string
 	stop               chan bool
 	softStop           bool
-	agent              agent.IAgent
+	agent              worldCommAgent
 }
 
 func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) WorldCommunicationState {
@@ -83,7 +83,7 @@ func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) Wor
 		marshaller:         &protocol.Marshaller{},
 		log:                logging.New(),
 		webRtc:             &webrtc.WebRtc{},
-		agent:              agent,
+		agent:              worldCommAgent{agent: agent},
 		coordinator:        makeCoordinator(coordinatorUrl),
 		Peers:              make(map[string]*peer),
 		peersIndex:         make(PeersIndex),
@@ -182,6 +182,7 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 			continue
 		}
 
+		state.agent.RecordReceivedReliableFromPeerSize(n)
 		bytes := buffer[:n]
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
@@ -330,6 +331,7 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 			continue
 		}
 
+		state.agent.RecordReceivedUnreliableFromPeerSize(n)
 		bytes := buffer[:n]
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
@@ -376,7 +378,7 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 				return
 			}
 
-			state.agent.RecordSentSize(len(bytes))
+			state.agent.RecordSentReliableToPeerSize(len(bytes))
 			n := len(p.sendReliable)
 			for i := 0; i < n; i++ {
 				bytes = <-p.sendReliable
@@ -384,7 +386,7 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 					return
 				}
-				state.agent.RecordSentSize(len(bytes))
+				state.agent.RecordSentReliableToPeerSize(len(bytes))
 			}
 		case bytes, ok := <-p.sendUnreliable:
 			if !ok {
@@ -400,7 +402,7 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 				return
 			}
 
-			state.agent.RecordSentSize(len(bytes))
+			state.agent.RecordSentUnreliableToPeerSize(len(bytes))
 			n := len(p.sendUnreliable)
 			for i := 0; i < n; i++ {
 				bytes = <-p.sendUnreliable
@@ -408,7 +410,7 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 					return
 				}
-				state.agent.RecordSentSize(len(bytes))
+				state.agent.RecordSentUnreliableToPeerSize(len(bytes))
 			}
 		}
 	}
@@ -481,7 +483,8 @@ func Process(state *WorldCommunicationState) {
 				processPeerMessage(state, msg)
 			}
 		case <-ticker.C:
-			state.agent.RecordTotalConnections(len(state.Peers))
+			state.agent.RecordTotalPeerConnections(len(state.Peers))
+			state.agent.RecordTotalTopicSubscriptions(len(state.Peers))
 
 			log.WithFields(logging.Fields{
 				"peers count":  len(state.Peers),

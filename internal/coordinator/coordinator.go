@@ -15,10 +15,10 @@ import (
 )
 
 const (
+	reportPeriod   = 30 * time.Second
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = 30 * time.Second
-	reportPeriod   = 60 * time.Second
 	maxMessageSize = 1536 // NOTE let's adjust this later
 )
 
@@ -53,7 +53,7 @@ type CoordinatorState struct {
 	Auth           authentication.Authentication
 	marshaller     protocol.IMarshaller
 	log            *logging.Logger
-	agent          agent.IAgent
+	agent          coordinatorAgent
 
 	Peers                        map[string]*Peer
 	registerCommServer           chan *Peer
@@ -72,7 +72,7 @@ func MakeState(agent agent.IAgent, serverSelector IServerSelector) CoordinatorSt
 		Auth:                         authentication.Make(),
 		marshaller:                   &protocol.Marshaller{},
 		log:                          logging.New(),
-		agent:                        agent,
+		agent:                        coordinatorAgent{agent: agent},
 		Peers:                        make(map[string]*Peer),
 		registerCommServer:           make(chan *Peer, 255),
 		registerClient:               make(chan *Peer, 255),
@@ -102,6 +102,7 @@ func (p *Peer) Send(state *CoordinatorState, msg protocol.Message) error {
 		return err
 	}
 
+	state.agent.RecordSentSize(len(bytes))
 	p.send <- bytes
 	return nil
 }
@@ -188,6 +189,7 @@ func readClientPump(state *CoordinatorState, p *Peer) {
 			continue
 		}
 
+		state.agent.RecordReceivedSize(len(bytes))
 		msgType := header.GetType()
 
 		switch msgType {
@@ -255,6 +257,7 @@ func readServerPump(state *CoordinatorState, p *Peer) {
 			continue
 		}
 
+		state.agent.RecordReceivedSize(len(bytes))
 		msgType := header.GetType()
 
 		switch msgType {
@@ -360,6 +363,8 @@ func ConnectClient(state *CoordinatorState, conn ws.IWebsocket) {
 
 func Process(state *CoordinatorState) {
 	log := state.log
+	ticker := time.NewTicker(reportPeriod)
+	defer ticker.Stop()
 	for {
 		select {
 		case s := <-state.registerCommServer:
@@ -397,6 +402,21 @@ func Process(state *CoordinatorState) {
 				p = <-state.clientConnectionRequestQueue
 				processConnectionRequest(state, p)
 			}
+		case <-ticker.C:
+			clientsCount := 0
+			serversCount := 0
+
+			for _, p := range state.Peers {
+				if p.isServer {
+					serversCount += 1
+				} else {
+					clientsCount += 1
+				}
+			}
+
+			state.agent.RecordTotalClientConnections(clientsCount)
+			state.agent.RecordTotalServerConnections(serversCount)
+
 		case <-state.stop:
 			log.Debug("stop signal")
 			return

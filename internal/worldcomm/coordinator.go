@@ -60,6 +60,8 @@ func (c *Coordinator) Send(state *WorldCommunicationState, msg protocol.Message)
 		log.WithError(err).Error("encode message failure")
 		return err
 	}
+
+	state.agent.RecordSentToCoordinatorSize(len(bytes))
 	c.send <- bytes
 	return nil
 }
@@ -91,6 +93,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 			break
 		}
 
+		state.agent.RecordReceivedFromCoordinatorSize(len(bytes))
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithError(err).Debug("decode header failure")
 			continue
