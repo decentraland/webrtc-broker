@@ -1,11 +1,12 @@
+PROTOC ?= protoc
+
 build:
 	go build -o build/simulation ./cmd/simulation
 	go build -o build/coordinator ./cmd/coordinator
 	go build -o build/server ./cmd/server
 
-copy-protocol:
-	cp ../communications-protocol/go/commproto.pb.go pkg/protocol/
-	cp ../communications-protocol/commproto.proto pkg/protocol/
+compile-protocol:
+	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./commproto.proto
 
 test: build
 	go test $(TEST_FLAGS) \
