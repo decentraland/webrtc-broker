@@ -31,7 +31,6 @@ const (
 
 type MockServerSelector struct {
 	serverAliases []string
-	Select_       func(selector *MockServerSelector, state *coordinator.CoordinatorState, forPeer *coordinator.Peer) *coordinator.Peer
 }
 
 func (r *MockServerSelector) ServerRegistered(server *coordinator.Peer) {
@@ -39,10 +38,6 @@ func (r *MockServerSelector) ServerRegistered(server *coordinator.Peer) {
 }
 
 func (r *MockServerSelector) ServerUnregistered(server *coordinator.Peer) {}
-
-func (r *MockServerSelector) Select(state *coordinator.CoordinatorState, forPeer *coordinator.Peer) *coordinator.Peer {
-	return r.Select_(r, state, forPeer)
-}
 
 func (r *MockServerSelector) GetServerAliasList(forPeer *coordinator.Peer) []string {
 	peers := []string{}
@@ -155,14 +150,15 @@ func makeTestClient(id string, connectUrl string) *TestClient {
 	return &TestClient{client: client, avatar: getRandomAvatar()}
 }
 
-func (tc *TestClient) start(t *testing.T) {
+func (tc *TestClient) start(t *testing.T) WorldData {
 	go func() {
 		require.NoError(t, tc.client.startCoordination())
 	}()
 
-	tc.alias = <-tc.client.alias
+	worldData := <-tc.client.worldData
+	tc.alias = worldData.MyAlias
 
-	require.NoError(t, tc.client.startWebRtc())
+	return worldData
 }
 
 func (tc *TestClient) sendAddTopicMessage(t *testing.T, topic string) {
@@ -209,10 +205,12 @@ func TestE2E(t *testing.T) {
 	c2 := makeTestClient("client2", connectUrl)
 
 	printTitle("Starting client1")
-	c1.start(t)
+	client1WorldData := c1.start(t)
+	require.NoError(t, c1.client.connect(client1WorldData.AvailableServers[0]))
 
 	printTitle("Starting client2")
-	c2.start(t)
+	client2WorldData := c2.start(t)
+	require.NoError(t, c2.client.connect(client2WorldData.AvailableServers[1]))
 
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
@@ -306,7 +304,7 @@ func TestE2E(t *testing.T) {
 	c2.client.stopUnreliableQueue <- true
 	go c2.client.conn.Close()
 	c2.client.conn = nil
-	c2.client.connect()
+	c2.client.connect(cs1.Alias)
 
 	c2.client.authMessage <- authBytes
 	time.Sleep(longSleepPeriod)

@@ -43,7 +43,6 @@ type Peer struct {
 type IServerSelector interface {
 	ServerRegistered(server *Peer)
 	ServerUnregistered(server *Peer)
-	Select(state *CoordinatorState, forPeer *Peer) *Peer
 	GetServerAliasList(forPeer *Peer) []string
 }
 
@@ -55,31 +54,29 @@ type CoordinatorState struct {
 	log            *logging.Logger
 	agent          coordinatorAgent
 
-	Peers                        map[string]*Peer
-	registerCommServer           chan *Peer
-	registerClient               chan *Peer
-	unregister                   chan *Peer
-	signalingQueue               chan *inMessage
-	clientConnectionRequestQueue chan *Peer
-	stop                         chan bool
-	softStop                     bool
+	Peers              map[string]*Peer
+	registerCommServer chan *Peer
+	registerClient     chan *Peer
+	unregister         chan *Peer
+	signalingQueue     chan *inMessage
+	stop               chan bool
+	softStop           bool
 }
 
 func MakeState(agent agent.IAgent, serverSelector IServerSelector) CoordinatorState {
 	return CoordinatorState{
-		serverSelector:               serverSelector,
-		upgrader:                     ws.MakeUpgrader(),
-		Auth:                         authentication.Make(),
-		marshaller:                   &protocol.Marshaller{},
-		log:                          logging.New(),
-		agent:                        coordinatorAgent{agent: agent},
-		Peers:                        make(map[string]*Peer),
-		registerCommServer:           make(chan *Peer, 255),
-		registerClient:               make(chan *Peer, 255),
-		unregister:                   make(chan *Peer, 255),
-		signalingQueue:               make(chan *inMessage, 255),
-		clientConnectionRequestQueue: make(chan *Peer, 255),
-		stop:                         make(chan bool),
+		serverSelector:     serverSelector,
+		upgrader:           ws.MakeUpgrader(),
+		Auth:               authentication.Make(),
+		marshaller:         &protocol.Marshaller{},
+		log:                logging.New(),
+		agent:              coordinatorAgent{agent: agent},
+		Peers:              make(map[string]*Peer),
+		registerCommServer: make(chan *Peer, 255),
+		registerClient:     make(chan *Peer, 255),
+		unregister:         make(chan *Peer, 255),
+		signalingQueue:     make(chan *inMessage, 255),
+		stop:               make(chan bool),
 	}
 }
 
@@ -155,75 +152,7 @@ func (p *Peer) Close() {
 	}
 }
 
-func readClientPump(state *CoordinatorState, p *Peer) {
-	defer func() {
-		p.Close()
-		state.unregister <- p
-	}()
-	marshaller := state.marshaller
-	log := state.log
-	p.conn.SetReadLimit(maxMessageSize)
-	p.conn.SetReadDeadline(time.Now().Add(pongWait))
-	p.conn.SetPongHandler(func(s string) error {
-		p.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
-	})
-
-	header := &protocol.CoordinatorMessage{}
-	webRtcMessage := &protocol.WebRtcMessage{}
-	connectMessage := &protocol.ConnectMessage{}
-
-	for {
-		bytes, err := p.conn.ReadMessage()
-		if err != nil {
-			if ws.IsUnexpectedCloseError(err) {
-				log.WithError(err).Error("unexcepted close error")
-			} else {
-				log.WithError(err).Error("read error")
-			}
-			break
-		}
-
-		if err := marshaller.Unmarshal(bytes, header); err != nil {
-			log.WithError(err).Debug("decode header failure")
-			continue
-		}
-
-		state.agent.RecordReceivedSize(len(bytes))
-		msgType := header.GetType()
-
-		switch msgType {
-		case protocol.MessageType_WEBRTC_OFFER, protocol.MessageType_WEBRTC_ANSWER, protocol.MessageType_WEBRTC_ICE_CANDIDATE:
-			bytes, err = repackageWebRtcMessage(state, p, bytes, webRtcMessage)
-			if err != nil {
-				continue
-			}
-
-			state.signalingQueue <- &inMessage{
-				msgType: msgType,
-				from:    p,
-				bytes:   bytes,
-				toAlias: webRtcMessage.ToAlias,
-			}
-		case protocol.MessageType_CONNECT:
-			if err := marshaller.Unmarshal(bytes, connectMessage); err != nil {
-				log.WithError(err).Debug("decode connect message failure")
-				continue
-			}
-
-			if connectMessage.ToAlias != "" {
-				log.Debug("client cannot specify ToAlias in CONNECT message")
-				continue
-			}
-
-			state.clientConnectionRequestQueue <- p
-		default:
-			log.WithField("type", msgType).Debug("unhandled message from client")
-		}
-	}
-}
-
-func readServerPump(state *CoordinatorState, p *Peer) {
+func readPump(state *CoordinatorState, p *Peer) {
 	defer func() {
 		state.unregister <- p
 		p.Close()
@@ -280,7 +209,7 @@ func readServerPump(state *CoordinatorState, p *Peer) {
 			}
 
 			if connectMessage.ToAlias == "" {
-				log.Warn("error: server should always specify peer id on connect message")
+				log.Warn("error: connect message should always specify peer alias")
 				continue
 			}
 
@@ -288,7 +217,7 @@ func readServerPump(state *CoordinatorState, p *Peer) {
 
 			bytes, err := marshaller.Marshal(connectMessage)
 			if err != nil {
-				log.WithError(err).Error("cannot recode connect message from server")
+				log.WithError(err).Error("cannot recode connect message")
 				continue
 			}
 
@@ -299,7 +228,7 @@ func readServerPump(state *CoordinatorState, p *Peer) {
 				toAlias: connectMessage.ToAlias,
 			}
 		default:
-			log.WithField("type", msgType).Debug("unhandled message from server")
+			log.WithField("type", msgType).Debug("unhandled message")
 		}
 	}
 }
@@ -339,7 +268,6 @@ func closeState(state *CoordinatorState) {
 	close(state.registerCommServer)
 	close(state.unregister)
 	close(state.signalingQueue)
-	close(state.clientConnectionRequestQueue)
 	close(state.stop)
 }
 
@@ -348,7 +276,7 @@ func ConnectCommServer(state *CoordinatorState, conn ws.IWebsocket) {
 	log.Info("socket connect (server)")
 	p := makeCommServer(conn)
 	state.registerCommServer <- p
-	go readServerPump(state, p)
+	go readPump(state, p)
 	go p.writePump(state)
 }
 
@@ -357,7 +285,7 @@ func ConnectClient(state *CoordinatorState, conn ws.IWebsocket) {
 	log.Info("socket connect (client)")
 	p := makeClient(conn)
 	state.registerClient <- p
-	go readClientPump(state, p)
+	go readPump(state, p)
 	go p.writePump(state)
 }
 
@@ -395,13 +323,6 @@ func Process(state *CoordinatorState) {
 				inMsg = <-state.signalingQueue
 				signal(state, inMsg)
 			}
-		case p := <-state.clientConnectionRequestQueue:
-			processConnectionRequest(state, p)
-			n := len(state.clientConnectionRequestQueue)
-			for i := 0; i < n; i++ {
-				p = <-state.clientConnectionRequestQueue
-				processConnectionRequest(state, p)
-			}
 		case <-ticker.C:
 			clientsCount := 0
 			serversCount := 0
@@ -436,15 +357,15 @@ func registerCommServer(state *CoordinatorState, p *Peer) error {
 	alias := fmt.Sprintf("server|%s", ksuid.New().String())
 	p.Alias = alias
 
-	peers := state.serverSelector.GetServerAliasList(p)
+	servers := state.serverSelector.GetServerAliasList(p)
 
 	state.Peers[alias] = p
 	state.serverSelector.ServerRegistered(p)
 
-	msg := &protocol.WelcomeServerMessage{
-		Type:  protocol.MessageType_WELCOME_SERVER,
-		Alias: alias,
-		Peers: peers,
+	msg := &protocol.WelcomeMessage{
+		Type:             protocol.MessageType_WELCOME,
+		Alias:            alias,
+		AvailableServers: servers,
 	}
 
 	return p.Send(state, msg)
@@ -453,10 +374,15 @@ func registerCommServer(state *CoordinatorState, p *Peer) error {
 func registerClient(state *CoordinatorState, p *Peer) {
 	alias := fmt.Sprintf("client|%s", ksuid.New().String())
 	p.Alias = alias
+
+	servers := state.serverSelector.GetServerAliasList(p)
+
 	state.Peers[alias] = p
-	msg := &protocol.WelcomeClientMessage{
-		Type:  protocol.MessageType_WELCOME_CLIENT,
-		Alias: alias,
+
+	msg := &protocol.WelcomeMessage{
+		Type:             protocol.MessageType_WELCOME,
+		Alias:            alias,
+		AvailableServers: servers,
 	}
 	p.Send(state, msg)
 }
@@ -475,33 +401,6 @@ func signal(state *CoordinatorState, inMsg *inMessage) {
 
 	if p != nil && !p.isClosed {
 		p.send <- inMsg.bytes
-	}
-}
-
-func processConnectionRequest(state *CoordinatorState, p *Peer) {
-	log := state.log
-
-	server := state.serverSelector.Select(state, p)
-
-	if server == nil {
-		log.WithFields(logging.Fields{
-			"peer": p.Alias,
-		}).Info("no server found for peer upon connect")
-		return
-	}
-
-	if !p.isClosed {
-		msg := &protocol.ConnectMessage{
-			Type: protocol.MessageType_CONNECT,
-		}
-
-		msg.FromAlias = server.Alias
-		msg.ToAlias = p.Alias
-		p.Send(state, msg)
-
-		msg.FromAlias = p.Alias
-		msg.ToAlias = server.Alias
-		server.Send(state, msg)
 	}
 }
 

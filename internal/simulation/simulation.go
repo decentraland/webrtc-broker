@@ -132,11 +132,11 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 		log.Fatal(client.startCoordination())
 	}()
 
-	alias := <-client.alias
+	worldData := <-client.worldData
 
-	log.Println("my alias is", alias)
+	log.Println("my alias is", worldData.MyAlias)
 
-	if err := client.startWebRtc(); err != nil {
+	if err := client.connect(worldData.AvailableServers[0]); err != nil {
 		log.Fatal(err)
 	}
 

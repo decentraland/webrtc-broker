@@ -60,10 +60,10 @@ func TestCoordinatorReadPump(t *testing.T) {
 
 	t.Run("welcome server message", func(t *testing.T) {
 		state, conn := setup()
-		msg := &protocol.WelcomeServerMessage{
-			Type:  protocol.MessageType_WELCOME_SERVER,
-			Alias: "server3",
-			Peers: []string{"server1", "server2"},
+		msg := &protocol.WelcomeMessage{
+			Type:             protocol.MessageType_WELCOME,
+			Alias:            "server3",
+			AvailableServers: []string{"server1", "server2"},
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
 		go state.coordinator.readPump(&state)

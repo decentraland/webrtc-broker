@@ -102,8 +102,8 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 		msgType := header.GetType()
 
 		switch msgType {
-		case protocol.MessageType_WELCOME_SERVER:
-			welcomeMessage := &protocol.WelcomeServerMessage{}
+		case protocol.MessageType_WELCOME:
+			welcomeMessage := &protocol.WelcomeMessage{}
 			if err := marshaller.Unmarshal(bytes, welcomeMessage); err != nil {
 				log.WithError(err).Error("decode welcome message failure")
 				return
@@ -126,7 +126,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 				return
 			}
 
-			for _, alias := range welcomeMessage.Peers {
+			for _, alias := range welcomeMessage.AvailableServers {
 				connectMessage.ToAlias = alias
 				state.coordinator.Send(state, connectMessage)
 

@@ -23,8 +23,7 @@ goog.exportSymbol('proto.ProfileData', null, global);
 goog.exportSymbol('proto.Role', null, global);
 goog.exportSymbol('proto.TopicMessage', null, global);
 goog.exportSymbol('proto.WebRtcMessage', null, global);
-goog.exportSymbol('proto.WelcomeClientMessage', null, global);
-goog.exportSymbol('proto.WelcomeServerMessage', null, global);
+goog.exportSymbol('proto.WelcomeMessage', null, global);
 goog.exportSymbol('proto.WorldCommMessage', null, global);
 
 /**
@@ -179,19 +178,19 @@ proto.CoordinatorMessage.prototype.setType = function(value) {
  * @extends {jspb.Message}
  * @constructor
  */
-proto.WelcomeServerMessage = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, proto.WelcomeServerMessage.repeatedFields_, null);
+proto.WelcomeMessage = function(opt_data) {
+  jspb.Message.initialize(this, opt_data, 0, -1, proto.WelcomeMessage.repeatedFields_, null);
 };
-goog.inherits(proto.WelcomeServerMessage, jspb.Message);
+goog.inherits(proto.WelcomeMessage, jspb.Message);
 if (goog.DEBUG && !COMPILED) {
-  proto.WelcomeServerMessage.displayName = 'proto.WelcomeServerMessage';
+  proto.WelcomeMessage.displayName = 'proto.WelcomeMessage';
 }
 /**
  * List of repeated fields within this message type.
  * @private {!Array<number>}
  * @const
  */
-proto.WelcomeServerMessage.repeatedFields_ = [3];
+proto.WelcomeMessage.repeatedFields_ = [3];
 
 
 
@@ -206,8 +205,8 @@ if (jspb.Message.GENERATE_TO_OBJECT) {
  *     for transitional soy proto support: http://goto/soy-param-migration
  * @return {!Object}
  */
-proto.WelcomeServerMessage.prototype.toObject = function(opt_includeInstance) {
-  return proto.WelcomeServerMessage.toObject(opt_includeInstance, this);
+proto.WelcomeMessage.prototype.toObject = function(opt_includeInstance) {
+  return proto.WelcomeMessage.toObject(opt_includeInstance, this);
 };
 
 
@@ -216,15 +215,15 @@ proto.WelcomeServerMessage.prototype.toObject = function(opt_includeInstance) {
  * @param {boolean|undefined} includeInstance Whether to include the JSPB
  *     instance for transitional soy proto support:
  *     http://goto/soy-param-migration
- * @param {!proto.WelcomeServerMessage} msg The msg instance to transform.
+ * @param {!proto.WelcomeMessage} msg The msg instance to transform.
  * @return {!Object}
  * @suppress {unusedLocalVariables} f is only used for nested messages
  */
-proto.WelcomeServerMessage.toObject = function(includeInstance, msg) {
+proto.WelcomeMessage.toObject = function(includeInstance, msg) {
   var f, obj = {
     type: jspb.Message.getFieldWithDefault(msg, 1, 0),
     alias: jspb.Message.getFieldWithDefault(msg, 2, ""),
-    peersList: jspb.Message.getRepeatedField(msg, 3)
+    availableServersList: jspb.Message.getRepeatedField(msg, 3)
   };
 
   if (includeInstance) {
@@ -238,23 +237,23 @@ proto.WelcomeServerMessage.toObject = function(includeInstance, msg) {
 /**
  * Deserializes binary data (in protobuf wire format).
  * @param {jspb.ByteSource} bytes The bytes to deserialize.
- * @return {!proto.WelcomeServerMessage}
+ * @return {!proto.WelcomeMessage}
  */
-proto.WelcomeServerMessage.deserializeBinary = function(bytes) {
+proto.WelcomeMessage.deserializeBinary = function(bytes) {
   var reader = new jspb.BinaryReader(bytes);
-  var msg = new proto.WelcomeServerMessage;
-  return proto.WelcomeServerMessage.deserializeBinaryFromReader(msg, reader);
+  var msg = new proto.WelcomeMessage;
+  return proto.WelcomeMessage.deserializeBinaryFromReader(msg, reader);
 };
 
 
 /**
  * Deserializes binary data (in protobuf wire format) from the
  * given reader into the given message object.
- * @param {!proto.WelcomeServerMessage} msg The message object to deserialize into.
+ * @param {!proto.WelcomeMessage} msg The message object to deserialize into.
  * @param {!jspb.BinaryReader} reader The BinaryReader to use.
- * @return {!proto.WelcomeServerMessage}
+ * @return {!proto.WelcomeMessage}
  */
-proto.WelcomeServerMessage.deserializeBinaryFromReader = function(msg, reader) {
+proto.WelcomeMessage.deserializeBinaryFromReader = function(msg, reader) {
   while (reader.nextField()) {
     if (reader.isEndGroup()) {
       break;
@@ -271,7 +270,7 @@ proto.WelcomeServerMessage.deserializeBinaryFromReader = function(msg, reader) {
       break;
     case 3:
       var value = /** @type {string} */ (reader.readString());
-      msg.addPeers(value);
+      msg.addAvailableServers(value);
       break;
     default:
       reader.skipField();
@@ -286,9 +285,9 @@ proto.WelcomeServerMessage.deserializeBinaryFromReader = function(msg, reader) {
  * Serializes the message to binary data (in protobuf wire format).
  * @return {!Uint8Array}
  */
-proto.WelcomeServerMessage.prototype.serializeBinary = function() {
+proto.WelcomeMessage.prototype.serializeBinary = function() {
   var writer = new jspb.BinaryWriter();
-  proto.WelcomeServerMessage.serializeBinaryToWriter(this, writer);
+  proto.WelcomeMessage.serializeBinaryToWriter(this, writer);
   return writer.getResultBuffer();
 };
 
@@ -296,11 +295,11 @@ proto.WelcomeServerMessage.prototype.serializeBinary = function() {
 /**
  * Serializes the given message to binary data (in protobuf wire
  * format), writing to the given BinaryWriter.
- * @param {!proto.WelcomeServerMessage} message
+ * @param {!proto.WelcomeMessage} message
  * @param {!jspb.BinaryWriter} writer
  * @suppress {unusedLocalVariables} f is only used for nested messages
  */
-proto.WelcomeServerMessage.serializeBinaryToWriter = function(message, writer) {
+proto.WelcomeMessage.serializeBinaryToWriter = function(message, writer) {
   var f = undefined;
   f = message.getType();
   if (f !== 0.0) {
@@ -316,7 +315,7 @@ proto.WelcomeServerMessage.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getPeersList();
+  f = message.getAvailableServersList();
   if (f.length > 0) {
     writer.writeRepeatedString(
       3,
@@ -330,13 +329,13 @@ proto.WelcomeServerMessage.serializeBinaryToWriter = function(message, writer) {
  * optional MessageType type = 1;
  * @return {!proto.MessageType}
  */
-proto.WelcomeServerMessage.prototype.getType = function() {
+proto.WelcomeMessage.prototype.getType = function() {
   return /** @type {!proto.MessageType} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
 };
 
 
 /** @param {!proto.MessageType} value */
-proto.WelcomeServerMessage.prototype.setType = function(value) {
+proto.WelcomeMessage.prototype.setType = function(value) {
   jspb.Message.setProto3EnumField(this, 1, value);
 };
 
@@ -345,28 +344,28 @@ proto.WelcomeServerMessage.prototype.setType = function(value) {
  * optional string alias = 2;
  * @return {string}
  */
-proto.WelcomeServerMessage.prototype.getAlias = function() {
+proto.WelcomeMessage.prototype.getAlias = function() {
   return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
 };
 
 
 /** @param {string} value */
-proto.WelcomeServerMessage.prototype.setAlias = function(value) {
+proto.WelcomeMessage.prototype.setAlias = function(value) {
   jspb.Message.setProto3StringField(this, 2, value);
 };
 
 
 /**
- * repeated string peers = 3;
+ * repeated string available_servers = 3;
  * @return {!Array<string>}
  */
-proto.WelcomeServerMessage.prototype.getPeersList = function() {
+proto.WelcomeMessage.prototype.getAvailableServersList = function() {
   return /** @type {!Array<string>} */ (jspb.Message.getRepeatedField(this, 3));
 };
 
 
 /** @param {!Array<string>} value */
-proto.WelcomeServerMessage.prototype.setPeersList = function(value) {
+proto.WelcomeMessage.prototype.setAvailableServersList = function(value) {
   jspb.Message.setField(this, 3, value || []);
 };
 
@@ -375,182 +374,13 @@ proto.WelcomeServerMessage.prototype.setPeersList = function(value) {
  * @param {!string} value
  * @param {number=} opt_index
  */
-proto.WelcomeServerMessage.prototype.addPeers = function(value, opt_index) {
+proto.WelcomeMessage.prototype.addAvailableServers = function(value, opt_index) {
   jspb.Message.addToRepeatedField(this, 3, value, opt_index);
 };
 
 
-proto.WelcomeServerMessage.prototype.clearPeersList = function() {
-  this.setPeersList([]);
-};
-
-
-
-/**
- * Generated by JsPbCodeGenerator.
- * @param {Array=} opt_data Optional initial data array, typically from a
- * server response, or constructed directly in Javascript. The array is used
- * in place and becomes part of the constructed object. It is not cloned.
- * If no data is provided, the constructed object will be empty, but still
- * valid.
- * @extends {jspb.Message}
- * @constructor
- */
-proto.WelcomeClientMessage = function(opt_data) {
-  jspb.Message.initialize(this, opt_data, 0, -1, null, null);
-};
-goog.inherits(proto.WelcomeClientMessage, jspb.Message);
-if (goog.DEBUG && !COMPILED) {
-  proto.WelcomeClientMessage.displayName = 'proto.WelcomeClientMessage';
-}
-
-
-if (jspb.Message.GENERATE_TO_OBJECT) {
-/**
- * Creates an object representation of this proto suitable for use in Soy templates.
- * Field names that are reserved in JavaScript and will be renamed to pb_name.
- * To access a reserved field use, foo.pb_<name>, eg, foo.pb_default.
- * For the list of reserved names please see:
- *     com.google.apps.jspb.JsClassTemplate.JS_RESERVED_WORDS.
- * @param {boolean=} opt_includeInstance Whether to include the JSPB instance
- *     for transitional soy proto support: http://goto/soy-param-migration
- * @return {!Object}
- */
-proto.WelcomeClientMessage.prototype.toObject = function(opt_includeInstance) {
-  return proto.WelcomeClientMessage.toObject(opt_includeInstance, this);
-};
-
-
-/**
- * Static version of the {@see toObject} method.
- * @param {boolean|undefined} includeInstance Whether to include the JSPB
- *     instance for transitional soy proto support:
- *     http://goto/soy-param-migration
- * @param {!proto.WelcomeClientMessage} msg The msg instance to transform.
- * @return {!Object}
- * @suppress {unusedLocalVariables} f is only used for nested messages
- */
-proto.WelcomeClientMessage.toObject = function(includeInstance, msg) {
-  var f, obj = {
-    type: jspb.Message.getFieldWithDefault(msg, 1, 0),
-    alias: jspb.Message.getFieldWithDefault(msg, 2, "")
-  };
-
-  if (includeInstance) {
-    obj.$jspbMessageInstance = msg;
-  }
-  return obj;
-};
-}
-
-
-/**
- * Deserializes binary data (in protobuf wire format).
- * @param {jspb.ByteSource} bytes The bytes to deserialize.
- * @return {!proto.WelcomeClientMessage}
- */
-proto.WelcomeClientMessage.deserializeBinary = function(bytes) {
-  var reader = new jspb.BinaryReader(bytes);
-  var msg = new proto.WelcomeClientMessage;
-  return proto.WelcomeClientMessage.deserializeBinaryFromReader(msg, reader);
-};
-
-
-/**
- * Deserializes binary data (in protobuf wire format) from the
- * given reader into the given message object.
- * @param {!proto.WelcomeClientMessage} msg The message object to deserialize into.
- * @param {!jspb.BinaryReader} reader The BinaryReader to use.
- * @return {!proto.WelcomeClientMessage}
- */
-proto.WelcomeClientMessage.deserializeBinaryFromReader = function(msg, reader) {
-  while (reader.nextField()) {
-    if (reader.isEndGroup()) {
-      break;
-    }
-    var field = reader.getFieldNumber();
-    switch (field) {
-    case 1:
-      var value = /** @type {!proto.MessageType} */ (reader.readEnum());
-      msg.setType(value);
-      break;
-    case 2:
-      var value = /** @type {string} */ (reader.readString());
-      msg.setAlias(value);
-      break;
-    default:
-      reader.skipField();
-      break;
-    }
-  }
-  return msg;
-};
-
-
-/**
- * Serializes the message to binary data (in protobuf wire format).
- * @return {!Uint8Array}
- */
-proto.WelcomeClientMessage.prototype.serializeBinary = function() {
-  var writer = new jspb.BinaryWriter();
-  proto.WelcomeClientMessage.serializeBinaryToWriter(this, writer);
-  return writer.getResultBuffer();
-};
-
-
-/**
- * Serializes the given message to binary data (in protobuf wire
- * format), writing to the given BinaryWriter.
- * @param {!proto.WelcomeClientMessage} message
- * @param {!jspb.BinaryWriter} writer
- * @suppress {unusedLocalVariables} f is only used for nested messages
- */
-proto.WelcomeClientMessage.serializeBinaryToWriter = function(message, writer) {
-  var f = undefined;
-  f = message.getType();
-  if (f !== 0.0) {
-    writer.writeEnum(
-      1,
-      f
-    );
-  }
-  f = message.getAlias();
-  if (f.length > 0) {
-    writer.writeString(
-      2,
-      f
-    );
-  }
-};
-
-
-/**
- * optional MessageType type = 1;
- * @return {!proto.MessageType}
- */
-proto.WelcomeClientMessage.prototype.getType = function() {
-  return /** @type {!proto.MessageType} */ (jspb.Message.getFieldWithDefault(this, 1, 0));
-};
-
-
-/** @param {!proto.MessageType} value */
-proto.WelcomeClientMessage.prototype.setType = function(value) {
-  jspb.Message.setProto3EnumField(this, 1, value);
-};
-
-
-/**
- * optional string alias = 2;
- * @return {string}
- */
-proto.WelcomeClientMessage.prototype.getAlias = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 2, ""));
-};
-
-
-/** @param {string} value */
-proto.WelcomeClientMessage.prototype.setAlias = function(value) {
-  jspb.Message.setProto3StringField(this, 2, value);
+proto.WelcomeMessage.prototype.clearAvailableServersList = function() {
+  this.setAvailableServersList([]);
 };
 
 
@@ -2702,18 +2532,17 @@ proto.ChatData.prototype.setText = function(value) {
  */
 proto.MessageType = {
   UNKNOWN_MESSAGE_TYPE: 0,
-  WELCOME_SERVER: 1,
-  WELCOME_CLIENT: 2,
-  CONNECT: 3,
-  WEBRTC_SUPPORTED: 4,
-  WEBRTC_OFFER: 5,
-  WEBRTC_ANSWER: 6,
-  WEBRTC_ICE_CANDIDATE: 7,
-  PING: 8,
-  ADD_TOPIC: 9,
-  REMOVE_TOPIC: 10,
-  TOPIC: 11,
-  AUTH: 12
+  WELCOME: 1,
+  CONNECT: 2,
+  WEBRTC_SUPPORTED: 3,
+  WEBRTC_OFFER: 4,
+  WEBRTC_ANSWER: 5,
+  WEBRTC_ICE_CANDIDATE: 6,
+  PING: 7,
+  ADD_TOPIC: 8,
+  REMOVE_TOPIC: 9,
+  TOPIC: 10,
+  AUTH: 11
 };
 
 /**

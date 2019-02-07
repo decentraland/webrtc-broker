@@ -2,18 +2,17 @@ syntax = "proto3";
 
 enum MessageType {
   UNKNOWN_MESSAGE_TYPE = 0;
-  WELCOME_SERVER = 1;
-  WELCOME_CLIENT = 2;
-  CONNECT = 3;
-  WEBRTC_SUPPORTED = 4;
-  WEBRTC_OFFER = 5;
-  WEBRTC_ANSWER = 6;
-  WEBRTC_ICE_CANDIDATE = 7;
-  PING = 8;
-  ADD_TOPIC = 9;
-  REMOVE_TOPIC = 10;
-  TOPIC = 11;
-  AUTH = 12;
+  WELCOME = 1;
+  CONNECT = 2;
+  WEBRTC_SUPPORTED = 3;
+  WEBRTC_OFFER = 4;
+  WEBRTC_ANSWER = 5;
+  WEBRTC_ICE_CANDIDATE = 6;
+  PING = 7;
+  ADD_TOPIC = 8;
+  REMOVE_TOPIC = 9;
+  TOPIC = 10;
+  AUTH = 11;
 }
 
 enum Role {
@@ -28,15 +27,10 @@ message CoordinatorMessage {
     MessageType type = 1;
 }
 
-message WelcomeServerMessage {
+message WelcomeMessage {
     MessageType type = 1;
     string alias = 2;
-    repeated string peers = 3;
-}
-
-message WelcomeClientMessage {
-    MessageType type = 1;
-    string alias = 2;
+    repeated string available_servers = 3;
 }
 
 message ConnectMessage {

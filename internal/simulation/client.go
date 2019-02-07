@@ -19,6 +19,11 @@ var webRtcConfig = webrtc.RTCConfiguration{
 	},
 }
 
+type WorldData struct {
+	MyAlias          string
+	AvailableServers []string
+}
+
 type Client struct {
 	id                  string
 	coordinatorUrl      string
@@ -31,7 +36,7 @@ type Client struct {
 	authMessage         chan []byte
 	stopReliableQueue   chan bool
 	stopUnreliableQueue chan bool
-	alias               chan string
+	worldData           chan WorldData
 	topics              map[string]bool
 }
 
@@ -93,7 +98,7 @@ func MakeClient(id string, coordinatorUrl string) *Client {
 		sendUnreliable:      make(chan []byte, 256),
 		stopReliableQueue:   make(chan bool),
 		stopUnreliableQueue: make(chan bool),
-		alias:               make(chan string),
+		worldData:           make(chan WorldData),
 		topics:              make(map[string]bool),
 	}
 
@@ -125,17 +130,19 @@ func (client *Client) startCoordination() error {
 		msgType := header.GetType()
 
 		switch msgType {
-		case protocol.MessageType_WELCOME_CLIENT:
-			welcomeMessage := &protocol.WelcomeServerMessage{}
+		case protocol.MessageType_WELCOME:
+			welcomeMessage := &protocol.WelcomeMessage{}
 			if err := proto.Unmarshal(bytes, welcomeMessage); err != nil {
 				log.Fatal("Failed to decode welcome message:", err)
 			}
 
-			client.alias <- welcomeMessage.Alias
-		case protocol.MessageType_CONNECT:
-			connectMessage := &protocol.ConnectMessage{}
-			if err := proto.Unmarshal(bytes, connectMessage); err != nil {
-				return err
+			if len(welcomeMessage.AvailableServers) == 0 {
+				log.Fatal("no server available to connect")
+			}
+
+			client.worldData <- WorldData{
+				MyAlias:          welcomeMessage.Alias,
+				AvailableServers: welcomeMessage.AvailableServers,
 			}
 		case protocol.MessageType_WEBRTC_OFFER:
 			webRtcMessage := &protocol.WebRtcMessage{}
@@ -175,7 +182,7 @@ func (client *Client) startCoordination() error {
 	}
 }
 
-func (client *Client) connect() error {
+func (client *Client) connect(serverAlias string) error {
 	log.Println("client connect()")
 
 	conn, err := webrtc.New(webRtcConfig)
@@ -185,7 +192,7 @@ func (client *Client) connect() error {
 
 	client.conn = conn
 
-	msg := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT}
+	msg := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT, ToAlias: serverAlias}
 	bytes, err := proto.Marshal(msg)
 	if err != nil {
 		return err
@@ -302,14 +309,6 @@ func (client *Client) connect() error {
 		})
 
 	})
-
-	return nil
-}
-
-func (client *Client) startWebRtc() error {
-	if err := client.connect(); err != nil {
-		return err
-	}
 
 	return nil
 }

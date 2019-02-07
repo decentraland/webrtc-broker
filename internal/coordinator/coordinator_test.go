@@ -114,62 +114,7 @@ func TestUpgradeRequest(t *testing.T) {
 	})
 }
 
-func TestReadClientPump(t *testing.T) {
-	setup := func() (CoordinatorState, *MockWebsocket, *Peer) {
-		state := makeTestState(t)
-
-		conn := makeMockWebsocket()
-		p := makeClient(conn)
-		p.Alias = "peer1"
-		return state, conn, p
-	}
-
-	t.Run("webrtc message", func(t *testing.T) {
-		state, conn, client := setup()
-		defer closeState(&state)
-
-		msg := &protocol.WebRtcMessage{
-			Type:    protocol.MessageType_WEBRTC_ANSWER,
-			ToAlias: "peer2",
-		}
-		require.NoError(t, conn.PrepareToRead(msg))
-		go readClientPump(&state, client)
-
-		p := <-state.unregister
-
-		require.Equal(t, client, p)
-		require.Len(t, state.signalingQueue, 1)
-
-		in := <-state.signalingQueue
-		require.Equal(t, in.msgType, msg.Type)
-		require.Equal(t, in.from, p)
-		require.Equal(t, in.toAlias, "peer2")
-
-		require.NoError(t, proto.Unmarshal(in.bytes, msg))
-		require.Equal(t, msg.FromAlias, "peer1")
-	})
-
-	t.Run("connect message", func(t *testing.T) {
-		state, conn, client := setup()
-		defer closeState(&state)
-
-		msg := &protocol.ConnectMessage{
-			Type: protocol.MessageType_CONNECT,
-		}
-		require.NoError(t, conn.PrepareToRead(msg))
-		go readClientPump(&state, client)
-
-		p := <-state.unregister
-
-		require.Equal(t, client, p)
-		require.Len(t, state.clientConnectionRequestQueue, 1)
-
-		c := <-state.clientConnectionRequestQueue
-		require.Equal(t, c, client)
-	})
-}
-
-func TestReadServerPump(t *testing.T) {
+func TestReadPump(t *testing.T) {
 	setup := func() (CoordinatorState, *MockWebsocket, *Peer) {
 		state := makeTestState(t)
 
@@ -188,7 +133,7 @@ func TestReadServerPump(t *testing.T) {
 			ToAlias: "peer2",
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
-		go readServerPump(&state, client)
+		go readPump(&state, client)
 
 		p := <-state.unregister
 
@@ -212,7 +157,7 @@ func TestReadServerPump(t *testing.T) {
 			Type: protocol.MessageType_CONNECT,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
-		go readServerPump(&state, client)
+		go readPump(&state, client)
 
 		p := <-state.unregister
 
@@ -229,7 +174,7 @@ func TestReadServerPump(t *testing.T) {
 			ToAlias: "peer2",
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
-		go readServerPump(&state, client)
+		go readPump(&state, client)
 
 		p := <-state.unregister
 
@@ -355,16 +300,16 @@ func TestRegisterCommServer(t *testing.T) {
 	state.registerCommServer <- s2
 	go Process(&state)
 
-	welcomeMessage := &protocol.WelcomeServerMessage{}
+	welcomeMessage := &protocol.WelcomeMessage{}
 
 	bytes := <-s.send
 	require.NoError(t, proto.Unmarshal(bytes, welcomeMessage))
-	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME_SERVER)
+	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME)
 	require.NotEmpty(t, welcomeMessage.Alias)
 
 	bytes = <-s2.send
 	require.NoError(t, proto.Unmarshal(bytes, welcomeMessage))
-	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME_SERVER)
+	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME)
 	require.NotEmpty(t, welcomeMessage.Alias)
 
 	state.stop <- true
@@ -386,16 +331,16 @@ func TestRegisterClient(t *testing.T) {
 	state.registerClient <- c2
 	go Process(&state)
 
-	welcomeMessage := &protocol.WelcomeClientMessage{}
+	welcomeMessage := &protocol.WelcomeMessage{}
 
 	bytes := <-c.send
 	require.NoError(t, proto.Unmarshal(bytes, welcomeMessage))
-	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME_CLIENT)
+	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME)
 	require.NotEmpty(t, welcomeMessage.Alias)
 
 	bytes = <-c2.send
 	require.NoError(t, proto.Unmarshal(bytes, welcomeMessage))
-	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME_CLIENT)
+	require.Equal(t, welcomeMessage.Type, protocol.MessageType_WELCOME)
 	require.NotEmpty(t, welcomeMessage.Alias)
 
 	state.stop <- true

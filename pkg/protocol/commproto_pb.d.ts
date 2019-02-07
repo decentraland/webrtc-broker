@@ -23,57 +23,33 @@ export namespace CoordinatorMessage {
   }
 }
 
-export class WelcomeServerMessage extends jspb.Message {
+export class WelcomeMessage extends jspb.Message {
   getType(): MessageType;
   setType(value: MessageType): void;
 
   getAlias(): string;
   setAlias(value: string): void;
 
-  clearPeersList(): void;
-  getPeersList(): Array<string>;
-  setPeersList(value: Array<string>): void;
-  addPeers(value: string, index?: number): string;
+  clearAvailableServersList(): void;
+  getAvailableServersList(): Array<string>;
+  setAvailableServersList(value: Array<string>): void;
+  addAvailableServers(value: string, index?: number): string;
 
   serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): WelcomeServerMessage.AsObject;
-  static toObject(includeInstance: boolean, msg: WelcomeServerMessage): WelcomeServerMessage.AsObject;
+  toObject(includeInstance?: boolean): WelcomeMessage.AsObject;
+  static toObject(includeInstance: boolean, msg: WelcomeMessage): WelcomeMessage.AsObject;
   static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
   static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: WelcomeServerMessage, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): WelcomeServerMessage;
-  static deserializeBinaryFromReader(message: WelcomeServerMessage, reader: jspb.BinaryReader): WelcomeServerMessage;
+  static serializeBinaryToWriter(message: WelcomeMessage, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): WelcomeMessage;
+  static deserializeBinaryFromReader(message: WelcomeMessage, reader: jspb.BinaryReader): WelcomeMessage;
 }
 
-export namespace WelcomeServerMessage {
+export namespace WelcomeMessage {
   export type AsObject = {
     type: MessageType,
     alias: string,
-    peersList: Array<string>,
-  }
-}
-
-export class WelcomeClientMessage extends jspb.Message {
-  getType(): MessageType;
-  setType(value: MessageType): void;
-
-  getAlias(): string;
-  setAlias(value: string): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): WelcomeClientMessage.AsObject;
-  static toObject(includeInstance: boolean, msg: WelcomeClientMessage): WelcomeClientMessage.AsObject;
-  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: WelcomeClientMessage, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): WelcomeClientMessage;
-  static deserializeBinaryFromReader(message: WelcomeClientMessage, reader: jspb.BinaryReader): WelcomeClientMessage;
-}
-
-export namespace WelcomeClientMessage {
-  export type AsObject = {
-    type: MessageType,
-    alias: string,
+    availableServersList: Array<string>,
   }
 }
 
@@ -383,18 +359,17 @@ export namespace ChatData {
 
 export enum MessageType {
   UNKNOWN_MESSAGE_TYPE = 0,
-  WELCOME_SERVER = 1,
-  WELCOME_CLIENT = 2,
-  CONNECT = 3,
-  WEBRTC_SUPPORTED = 4,
-  WEBRTC_OFFER = 5,
-  WEBRTC_ANSWER = 6,
-  WEBRTC_ICE_CANDIDATE = 7,
-  PING = 8,
-  ADD_TOPIC = 9,
-  REMOVE_TOPIC = 10,
-  TOPIC = 11,
-  AUTH = 12,
+  WELCOME = 1,
+  CONNECT = 2,
+  WEBRTC_SUPPORTED = 3,
+  WEBRTC_OFFER = 4,
+  WEBRTC_ANSWER = 5,
+  WEBRTC_ICE_CANDIDATE = 6,
+  PING = 7,
+  ADD_TOPIC = 8,
+  REMOVE_TOPIC = 9,
+  TOPIC = 10,
+  AUTH = 11,
 }
 
 export enum Role {
