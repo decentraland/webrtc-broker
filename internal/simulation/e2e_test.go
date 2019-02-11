@@ -78,17 +78,8 @@ func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server,
 	agent, err := agent.Make(appName, "")
 	require.NoError(t, err)
 
-	i := 0
 	selector := &MockServerSelector{
 		serverAliases: []string{},
-		Select_: func(selector *MockServerSelector, state *coordinator.CoordinatorState, forPeer *coordinator.Peer) *coordinator.Peer {
-			alias := selector.serverAliases[i]
-			i += 1
-			if i == len(selector.serverAliases) {
-				i = 0
-			}
-			return state.Peers[alias]
-		},
 	}
 	cs := coordinator.MakeState(agent, selector)
 
