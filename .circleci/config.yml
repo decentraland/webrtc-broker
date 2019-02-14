@@ -4,7 +4,7 @@ jobs:
     docker:
       - image: docker:stable-git
         environment: &ENVIRONMENT
-          DOCKER_IMAGE_NAME: decentraland/communications-server-go
+          DOCKER_IMAGE_NAME: decentraland/communications-server
 
 
     working_directory: ~/repo
