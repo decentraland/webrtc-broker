@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 
 	"github.com/decentraland/communications-server-go/internal/agent"
 	"github.com/decentraland/communications-server-go/internal/authentication"
@@ -11,7 +12,7 @@ import (
 )
 
 func main() {
-	coordinatorUrl := flag.String("coordinatorUrl", "ws://localhost:9090/discover", "")
+	coordinatorUrl := flag.String("coordinatorUrl", "ws://localhost:9090", "")
 	version := flag.String("version", "UNKNOWN", "")
 	newrelicApiKey := flag.String("newrelicKey", "", "")
 	appName := flag.String("appName", "dcl-comm-server", "")
@@ -35,7 +36,8 @@ func main() {
 		log.Fatal("Cannot initialize new relic: ", err)
 	}
 
-	s := worldcomm.MakeState(agent, *authMethod, *coordinatorUrl)
+	u := fmt.Sprintf("%s/discover", *coordinatorUrl)
+	s := worldcomm.MakeState(agent, *authMethod, u)
 
 	if *noopAuthEnabled {
 		s.Auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
