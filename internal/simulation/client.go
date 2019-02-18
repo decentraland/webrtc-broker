@@ -11,8 +11,8 @@ import (
 	"github.com/pions/webrtc/pkg/ice"
 )
 
-var webRtcConfig = webrtc.RTCConfiguration{
-	IceServers: []webrtc.RTCIceServer{
+var webRtcConfig = webrtc.Configuration{
+	ICEServers: []webrtc.ICEServer{
 		{
 			URLs: []string{"stun:stun.l.google.com:19302"},
 		},
@@ -28,7 +28,7 @@ type Client struct {
 	id                  string
 	coordinatorUrl      string
 	coordinator         *websocket.Conn
-	conn                *webrtc.RTCPeerConnection
+	conn                *webrtc.PeerConnection
 	sendReliable        chan []byte
 	sendUnreliable      chan []byte
 	receivedReliable    chan []byte
@@ -152,8 +152,8 @@ func (client *Client) startCoordination() error {
 
 			log.Println("offer received from: ", webRtcMessage.FromAlias)
 
-			offer := webrtc.RTCSessionDescription{
-				Type: webrtc.RTCSdpTypeOffer,
+			offer := webrtc.SessionDescription{
+				Type: webrtc.SDPTypeOffer,
 				Sdp:  webRtcMessage.Sdp,
 			}
 
@@ -164,6 +164,11 @@ func (client *Client) startCoordination() error {
 			answer, err := client.conn.CreateAnswer(nil)
 			if err != nil {
 				log.Fatal("error creating webrtc answer", err)
+			}
+
+			err = client.conn.SetLocalDescription(answer)
+			if err != nil {
+				log.Fatal("error setting local description", err)
 			}
 
 			answerWebRtcMessage := &protocol.WebRtcMessage{
@@ -185,7 +190,7 @@ func (client *Client) startCoordination() error {
 func (client *Client) connect(serverAlias string) error {
 	log.Println("client connect()")
 
-	conn, err := webrtc.New(webRtcConfig)
+	conn, err := webrtc.NewPeerConnection(webRtcConfig)
 	if err != nil {
 		return err
 	}
@@ -208,7 +213,7 @@ func (client *Client) connect(serverAlias string) error {
 		}
 	})
 
-	conn.OnDataChannel(func(d *webrtc.RTCDataChannel) {
+	conn.OnDataChannel(func(d *webrtc.DataChannel) {
 
 		readPump := func(client *Client, c *datachannel.DataChannel, reliable bool) {
 			var received chan []byte

@@ -27,14 +27,14 @@ type IWebRtcConnection interface {
 type webRtcConnection struct {
 	onUnreliableChannelOpen func()
 	onReliableChannelOpen   func()
-	conn                    *_webrtc.RTCPeerConnection
+	conn                    *_webrtc.PeerConnection
 	reliableDataChannel     *datachannel.DataChannel
 	unreliableDataChannel   *datachannel.DataChannel
 	createdAt               time.Time
 }
 
-var config = _webrtc.RTCConfiguration{
-	IceServers: []_webrtc.RTCIceServer{
+var config = _webrtc.Configuration{
+	ICEServers: []_webrtc.ICEServer{
 		{
 			URLs: []string{"stun:stun.l.google.com:19302"},
 		},
@@ -45,7 +45,7 @@ var config = _webrtc.RTCConfiguration{
 // but not sure what happen if the channels are created client side
 func openUnreliableDataChannel(conn *webRtcConnection) error {
 	var maxRetransmits uint16 = 0
-	options := &_webrtc.RTCDataChannelInit{MaxRetransmits: &maxRetransmits}
+	options := &_webrtc.DataChannelInit{MaxRetransmits: &maxRetransmits}
 	c, err := conn.conn.CreateDataChannel("unreliable", options)
 
 	if err != nil {
@@ -104,9 +104,14 @@ func (conn *webRtcConnection) OnUnreliableChannelOpen(l func()) {
 
 func (conn *webRtcConnection) CreateOffer() (string, error) {
 	offer, err := conn.conn.CreateOffer(nil)
-
 	if err != nil {
 		log.WithError(err).Error("error creating webrtc offer")
+		return "", err
+	}
+
+	err = conn.conn.SetLocalDescription(offer)
+	if err != nil {
+		log.WithError(err).Error("error setting local description, on create offer")
 		return "", err
 	}
 
@@ -114,8 +119,8 @@ func (conn *webRtcConnection) CreateOffer() (string, error) {
 }
 
 func (conn *webRtcConnection) OnAnswer(sdp string) error {
-	answer := _webrtc.RTCSessionDescription{
-		Type: _webrtc.RTCSdpTypeAnswer,
+	answer := _webrtc.SessionDescription{
+		Type: _webrtc.SDPTypeAnswer,
 		Sdp:  sdp,
 	}
 
@@ -128,8 +133,8 @@ func (conn *webRtcConnection) OnAnswer(sdp string) error {
 }
 
 func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
-	offer := _webrtc.RTCSessionDescription{
-		Type: _webrtc.RTCSdpTypeOffer,
+	offer := _webrtc.SessionDescription{
+		Type: _webrtc.SDPTypeOffer,
 		Sdp:  sdp,
 	}
 
@@ -139,9 +144,14 @@ func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 	}
 
 	answer, err := conn.conn.CreateAnswer(nil)
-
 	if err != nil {
 		log.WithError(err).Error("error creating webrtc answer")
+		return "", err
+	}
+
+	err = conn.conn.SetLocalDescription(answer)
+	if err != nil {
+		log.WithError(err).Error("error setting local description, on OnOffer")
 		return "", err
 	}
 
@@ -149,7 +159,7 @@ func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 }
 
 func (conn *webRtcConnection) OnIceCandidate(sdp string) error {
-	if err := conn.conn.AddIceCandidate(sdp); err != nil {
+	if err := conn.conn.AddICECandidate(sdp); err != nil {
 		log.WithError(err).Error("error adding ice candidate")
 		return err
 	}
@@ -208,7 +218,7 @@ type IWebRtc interface {
 type WebRtc struct{}
 
 func (*WebRtc) NewConnection() (IWebRtcConnection, error) {
-	conn, err := _webrtc.New(config)
+	conn, err := _webrtc.NewPeerConnection(config)
 	if err != nil {
 		log.WithError(err).Error("cannot create a new webrtc connection")
 		return nil, err
