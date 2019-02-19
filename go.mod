@@ -7,14 +7,14 @@ require (
 	github.com/pions/datachannel v1.2.0
 	github.com/pions/pkg v0.0.0-20181115215726-b60cd756f712 // indirect
 	github.com/pions/quic-go v0.10.2 // indirect
-	github.com/pions/sctp v1.4.0 // indirect
-	github.com/pions/webrtc v1.2.1-0.20190218053504-632b16b85256
+	github.com/pions/sdp v1.3.0 // indirect
+	github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01
 	github.com/segmentio/ksuid v1.0.2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
 	golang.org/x/net v0.0.0-20190213061140-3a22650c66bd // indirect
 	golang.org/x/sync v0.0.0-20181221193216-37e7f081c4d4 // indirect
-	golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a // indirect
+	golang.org/x/sys v0.0.0-20190219092855-153ac476189d // indirect
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v2 v2.2.2 // indirect
 )

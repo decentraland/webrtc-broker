@@ -46,6 +46,8 @@ github.com/pions/sctp v1.4.0 h1:U8SAVk+nWa2248SZGHCYsNyOqe/DM5+TKOAlh9Qdw8c=
 github.com/pions/sctp v1.4.0/go.mod h1:dAna+Ct/aIIFiGW45yhGzuQjULWD7ni1vjoKHa9DsyU=
 github.com/pions/sdp v1.3.0 h1:HIv6ZvdzRPq+H4T8EV8K9pZ4EGnYOr14HFZ9Rksh6/0=
 github.com/pions/sdp v1.3.0/go.mod h1:moNMmnVSlx8rBBb39U9t0Rdr7xvMlqiJjHlMESRad5k=
+github.com/pions/sdp/v2 v2.0.0 h1:tWh8ehKPtXTaFYF12sBAHqYmhV36Q7YTmm3O6ycNa6M=
+github.com/pions/sdp/v2 v2.0.0/go.mod h1:KGRBcHfpkgJXjrzKJz2wj/Jf1KWnsHdoIiqtayQ5QmE=
 github.com/pions/srtp v1.0.3 h1:0rlg7yUHQblFA1e451mhx50IkA7+e48ja5K8mljyMYY=
 github.com/pions/srtp v1.0.3/go.mod h1:egXe0STDyQDXLm7hjOMzuk7rkAhJ1SHOx+tTgtw/cQs=
 github.com/pions/stun v0.2.0 h1:spIzpfkEg6HV+2iIo6qeOsAjtadZKzbXbrd2e9ZCCcs=
@@ -59,6 +61,8 @@ github.com/pions/webrtc v1.2.1-0.20190211224249-885c5daf0df0 h1:VLRwTVJck7uL5E4F
 github.com/pions/webrtc v1.2.1-0.20190211224249-885c5daf0df0/go.mod h1:sbj1414DD9h/sMlW2b5GA6xp7nCaJnBuwhN0dGHUDb4=
 github.com/pions/webrtc v1.2.1-0.20190218053504-632b16b85256 h1:+zcUWNJGLvJa8V8aAO3kDd9Jiuvh39hDmN4RpZxU3SA=
 github.com/pions/webrtc v1.2.1-0.20190218053504-632b16b85256/go.mod h1:9sC6QladzDpuNNwbHyuLGSJvYGXFYp7msFHJTPKlDwg=
+github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01 h1:Z2TFAwuZ0XctoRUMBe5kDjHhqkqTfAl/KFnnrlBdl48=
+github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01/go.mod h1:9coyskvsigdm92fVhFJbMxsgDVTsesOa/IR0s2bpSeQ=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
@@ -92,6 +96,8 @@ golang.org/x/sys v0.0.0-20190209173611-3b5209105503 h1:5SvYFrOM3W8Mexn9/oA44Ji7v
 golang.org/x/sys v0.0.0-20190209173611-3b5209105503/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a h1:1BGLXjeY4akVXGgbC9HugT3Jv3hCI0z56oJR5vAMgBU=
 golang.org/x/sys v0.0.0-20190215142949-d0b11bdaac8a/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
+golang.org/x/sys v0.0.0-20190219092855-153ac476189d h1:Z0Ahzd7HltpJtjAHHxX8QFP3j1yYgiuvjbjRzDj/KH0=
+golang.org/x/sys v0.0.0-20190219092855-153ac476189d/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=

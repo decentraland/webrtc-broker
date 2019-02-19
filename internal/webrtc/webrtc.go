@@ -115,13 +115,13 @@ func (conn *webRtcConnection) CreateOffer() (string, error) {
 		return "", err
 	}
 
-	return offer.Sdp, nil
+	return offer.SDP, nil
 }
 
 func (conn *webRtcConnection) OnAnswer(sdp string) error {
 	answer := _webrtc.SessionDescription{
 		Type: _webrtc.SDPTypeAnswer,
-		Sdp:  sdp,
+		SDP:  sdp,
 	}
 
 	if err := conn.conn.SetRemoteDescription(answer); err != nil {
@@ -135,7 +135,7 @@ func (conn *webRtcConnection) OnAnswer(sdp string) error {
 func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 	offer := _webrtc.SessionDescription{
 		Type: _webrtc.SDPTypeOffer,
-		Sdp:  sdp,
+		SDP:  sdp,
 	}
 
 	if err := conn.conn.SetRemoteDescription(offer); err != nil {
@@ -155,7 +155,7 @@ func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 		return "", err
 	}
 
-	return answer.Sdp, nil
+	return answer.SDP, nil
 }
 
 func (conn *webRtcConnection) OnIceCandidate(sdp string) error {

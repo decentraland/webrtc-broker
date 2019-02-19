@@ -154,7 +154,7 @@ func (client *Client) startCoordination() error {
 
 			offer := webrtc.SessionDescription{
 				Type: webrtc.SDPTypeOffer,
-				Sdp:  webRtcMessage.Sdp,
+				SDP:  webRtcMessage.Sdp,
 			}
 
 			if err := client.conn.SetRemoteDescription(offer); err != nil {
@@ -173,7 +173,7 @@ func (client *Client) startCoordination() error {
 
 			answerWebRtcMessage := &protocol.WebRtcMessage{
 				Type:    protocol.MessageType_WEBRTC_ANSWER,
-				Sdp:     answer.Sdp,
+				Sdp:     answer.SDP,
 				ToAlias: webRtcMessage.FromAlias,
 			}
 			bytes, err := proto.Marshal(answerWebRtcMessage)
