@@ -67,6 +67,6 @@ func main() {
 		coordinator.ConnectClient(&c, ws)
 	})
 
-	log.Info("starting coordinator", addr, "- version:", *version)
+	log.Info("starting coordinator ", addr, "- version:", *version)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }

@@ -63,6 +63,8 @@ github.com/pions/webrtc v1.2.1-0.20190218053504-632b16b85256 h1:+zcUWNJGLvJa8V8a
 github.com/pions/webrtc v1.2.1-0.20190218053504-632b16b85256/go.mod h1:9sC6QladzDpuNNwbHyuLGSJvYGXFYp7msFHJTPKlDwg=
 github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01 h1:Z2TFAwuZ0XctoRUMBe5kDjHhqkqTfAl/KFnnrlBdl48=
 github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01/go.mod h1:9coyskvsigdm92fVhFJbMxsgDVTsesOa/IR0s2bpSeQ=
+github.com/pions/webrtc v1.2.1-0.20190219201520-ad647c28d7ad h1:Iam8KAhVj3P98S2oYIcEDJMX2uGgrpB9aBbOoWQZ6A8=
+github.com/pions/webrtc v1.2.1-0.20190219201520-ad647c28d7ad/go.mod h1:9coyskvsigdm92fVhFJbMxsgDVTsesOa/IR0s2bpSeQ=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

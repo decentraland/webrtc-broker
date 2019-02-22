@@ -9,7 +9,7 @@ compile-protocol:
 	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./commproto.proto
 
 test: build
-	go test $(TEST_FLAGS) \
+	go test -race $(TEST_FLAGS) \
 github.com/decentraland/communications-server-go/internal/worldcomm \
 github.com/decentraland/communications-server-go/internal/coordinator
 
@@ -20,7 +20,7 @@ check-cover: cover
 	go tool cover -html=coverage.out
 
 test-integration: build
-	go test -count=1 $(TEST_FLAGS) -tags=integration github.com/decentraland/communications-server-go/internal/simulation
+	go test -race -count=1 $(TEST_FLAGS) -tags=integration github.com/decentraland/communications-server-go/internal/simulation
 
 vtest-integration: TEST_FLAGS=-v
 vtest-integration: test-integration

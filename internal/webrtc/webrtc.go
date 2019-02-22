@@ -41,8 +41,6 @@ var config = _webrtc.Configuration{
 	},
 }
 
-// TODO unreliable channels are not supported in pion
-// but not sure what happen if the channels are created client side
 func openUnreliableDataChannel(conn *webRtcConnection) error {
 	var maxRetransmits uint16 = 0
 	options := &_webrtc.DataChannelInit{MaxRetransmits: &maxRetransmits}

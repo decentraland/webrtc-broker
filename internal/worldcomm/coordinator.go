@@ -152,7 +152,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 				continue
 			}
 			log.WithFields(logging.Fields{
-				"id": state.Alias,
+				"id": state.GetAlias(),
 				"to": connectMessage.FromAlias,
 			}).Info("Connect message received")
 			state.connectQueue <- connectMessage.FromAlias

@@ -231,7 +231,6 @@ func TestWritePump(t *testing.T) {
 		p.send <- msg
 
 		p.writePump(&state)
-		require.True(t, p.isClosed)
 	})
 
 	t.Run("first write error", func(t *testing.T) {
@@ -254,7 +253,6 @@ func TestWritePump(t *testing.T) {
 		p.send <- msg
 
 		p.writePump(&state)
-		require.True(t, p.isClosed)
 	})
 }
 

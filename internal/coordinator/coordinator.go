@@ -107,7 +107,6 @@ func (p *Peer) Send(state *CoordinatorState, msg protocol.Message) error {
 func (p *Peer) writePump(state *CoordinatorState) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
-		p.Close()
 		ticker.Stop()
 	}()
 

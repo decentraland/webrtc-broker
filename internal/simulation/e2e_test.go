@@ -25,8 +25,8 @@ type MockAuthenticator = _testing.MockAuthenticator
 var appName = "e2e-test"
 
 const (
-	sleepPeriod     = 1 * time.Second
-	longSleepPeriod = 10 * time.Second
+	sleepPeriod     = 5 * time.Second
+	longSleepPeriod = 15 * time.Second
 )
 
 type MockServerSelector struct {
@@ -112,10 +112,67 @@ func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server,
 	return cs, s, discoveryUrl, connectUrl
 }
 
-func startCommServer(t *testing.T, discoveryUrl string) worldcomm.WorldCommunicationState {
+type peerSnapshot struct {
+	IsAuthenticated bool
+	Topics          map[string]bool
+}
+
+type worldCommSnapshot struct {
+	Alias      string
+	PeersCount int
+	Peers      map[string]peerSnapshot
+}
+
+type testReporter struct {
+	RequestData chan bool
+	Data        chan worldCommSnapshot
+}
+
+func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
+	select {
+	case <-r.RequestData:
+		peers := make(map[string]peerSnapshot)
+
+		for alias, p := range state.Peers {
+			s := peerSnapshot{
+				IsAuthenticated: p.IsAuthenticated(),
+				Topics:          make(map[string]bool),
+			}
+
+			for topic := range p.Topics {
+				s.Topics[topic] = true
+			}
+
+			peers[alias] = s
+		}
+
+		snapshot := worldCommSnapshot{
+			Alias:      state.GetAlias(),
+			PeersCount: len(state.Peers),
+			Peers:      peers,
+		}
+		r.Data <- snapshot
+	default:
+	}
+}
+
+func (r *testReporter) GetStateSnapshot() worldCommSnapshot {
+	r.RequestData <- true
+	return <-r.Data
+}
+
+func startCommServer(t *testing.T, discoveryUrl string) *testReporter {
 	agent, err := agent.Make(appName, "")
 	require.NoError(t, err)
 	ws := worldcomm.MakeState(agent, "testAuth", discoveryUrl)
+
+	ws.ReportPeriod = 1 * time.Second
+	reporter := &testReporter{
+		RequestData: make(chan bool),
+		Data:        make(chan worldCommSnapshot),
+	}
+
+	ws.Reporter = reporter
 
 	auth := makeTestAuthenticator()
 	ws.Auth.AddOrUpdateAuthenticator("testAuth", auth)
@@ -123,7 +180,7 @@ func startCommServer(t *testing.T, discoveryUrl string) worldcomm.WorldCommunica
 
 	require.NoError(t, worldcomm.ConnectCoordinator(&ws))
 	go worldcomm.Process(&ws)
-	return ws
+	return reporter
 }
 
 type TestClient struct {
@@ -189,8 +246,8 @@ func TestE2E(t *testing.T) {
 	topicMessage := &protocol.TopicMessage{}
 
 	printTitle("starting comm servers")
-	cs1 := startCommServer(t, discoveryUrl)
-	cs2 := startCommServer(t, discoveryUrl)
+	comm1Reporter := startCommServer(t, discoveryUrl)
+	comm2Reporter := startCommServer(t, discoveryUrl)
 
 	c1 := makeTestClient("client1", connectUrl)
 	c2 := makeTestClient("client2", connectUrl)
@@ -205,21 +262,24 @@ func TestE2E(t *testing.T) {
 
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
-	require.NotEmpty(t, cs1.Alias)
-	require.NotEmpty(t, cs2.Alias)
+
+	comm1Snapshot := comm1Reporter.GetStateSnapshot()
+	comm2Snapshot := comm2Reporter.GetStateSnapshot()
+	require.NotEmpty(t, comm1Snapshot.Alias)
+	require.NotEmpty(t, comm1Snapshot.Alias)
 	require.NotEmpty(t, c1.alias)
 	require.NotEmpty(t, c2.alias)
-	require.Equal(t, 4, len(cs1.Peers)+len(cs2.Peers))
+	require.Equal(t, 4, comm1Snapshot.PeersCount+comm2Snapshot.PeersCount)
 
 	printTitle("Aliases")
-	log.Println("commserver1 alias is", cs1.Alias)
-	log.Println("commserver2 alias is", cs2.Alias)
+	log.Println("commserver1 alias is", comm1Snapshot.Alias)
+	log.Println("commserver2 alias is", comm2Snapshot.Alias)
 	log.Println("client1 alias is", c1.alias)
 	log.Println("client2 alias is", c2.alias)
 
 	printTitle("Connections")
-	log.Println(cs1.Peers)
-	log.Println(cs2.Peers)
+	log.Println(comm1Snapshot.Peers)
+	log.Println(comm2Snapshot.Peers)
 
 	printTitle("Authorizing clients")
 	authBytes, err := encodeAuthMessage("testAuth", protocol.Role_CLIENT, nil)
@@ -229,10 +289,12 @@ func TestE2E(t *testing.T) {
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
-	require.True(t, cs1.Peers[cs2.Alias].IsAuthenticated)
-	require.True(t, cs2.Peers[cs1.Alias].IsAuthenticated)
-	require.True(t, cs1.Peers[c1.alias].IsAuthenticated)
-	require.True(t, cs2.Peers[c2.alias].IsAuthenticated)
+	comm1Snapshot = comm1Reporter.GetStateSnapshot()
+	comm2Snapshot = comm2Reporter.GetStateSnapshot()
+	require.True(t, comm1Snapshot.Peers[comm2Snapshot.Alias].IsAuthenticated)
+	require.True(t, comm2Snapshot.Peers[comm1Snapshot.Alias].IsAuthenticated)
+	require.True(t, comm1Snapshot.Peers[c1.alias].IsAuthenticated)
+	require.True(t, comm2Snapshot.Peers[c2.alias].IsAuthenticated)
 
 	printTitle("Both clients are subscribing to 'profile' topic")
 	c1.sendAddTopicMessage(t, "profile")
@@ -240,8 +302,10 @@ func TestE2E(t *testing.T) {
 
 	// NOTE: wait until subscriptions are ready
 	time.Sleep(sleepPeriod)
-	require.True(t, cs1.Peers[c1.alias].Topics["profile"])
-	require.True(t, cs2.Peers[c2.alias].Topics["profile"])
+	comm1Snapshot = comm1Reporter.GetStateSnapshot()
+	comm2Snapshot = comm2Reporter.GetStateSnapshot()
+	require.True(t, comm1Snapshot.Peers[c1.alias].Topics["profile"])
+	require.True(t, comm2Snapshot.Peers[c2.alias].Topics["profile"])
 
 	printTitle("Each client sends a profile message, by reliable channel")
 	c1.sendProfileReliableMessage(t, "profile")
@@ -288,25 +352,28 @@ func TestE2E(t *testing.T) {
 	c2.sendRemoveTopicMessage(t, "profile")
 
 	time.Sleep(sleepPeriod)
-	require.False(t, cs2.Peers[c2.alias].Topics["profile"])
+	comm2Snapshot = comm2Reporter.GetStateSnapshot()
+	require.False(t, comm2Snapshot.Peers[c2.alias].Topics["profile"])
 
 	printTitle("Testing webrtc connection close")
 	c2.client.stopReliableQueue <- true
 	c2.client.stopUnreliableQueue <- true
 	go c2.client.conn.Close()
 	c2.client.conn = nil
-	c2.client.connect(cs1.Alias)
+	c2.client.connect(comm1Snapshot.Alias)
 
 	c2.client.authMessage <- authBytes
 	time.Sleep(longSleepPeriod)
-	require.True(t, cs1.Peers[c1.alias].IsAuthenticated)
-	require.True(t, cs1.Peers[c2.alias].IsAuthenticated)
+	comm1Snapshot = comm1Reporter.GetStateSnapshot()
+	require.True(t, comm1Snapshot.Peers[c1.alias].IsAuthenticated)
+	require.True(t, comm1Snapshot.Peers[c2.alias].IsAuthenticated)
 
 	printTitle("Subscribe to topics again")
 	c2.sendAddTopicMessage(t, "profile")
 	time.Sleep(longSleepPeriod)
-	require.True(t, cs1.Peers[c1.alias].Topics["profile"])
-	require.True(t, cs1.Peers[c2.alias].Topics["profile"])
+	comm1Snapshot = comm1Reporter.GetStateSnapshot()
+	require.True(t, comm1Snapshot.Peers[c1.alias].Topics["profile"])
+	require.True(t, comm1Snapshot.Peers[c2.alias].Topics["profile"])
 
 	printTitle("Each client sends a profile message, by reliable channel")
 	c1.sendProfileReliableMessage(t, "profile")

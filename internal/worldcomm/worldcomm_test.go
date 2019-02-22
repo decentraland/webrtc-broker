@@ -166,7 +166,7 @@ func TestReadPeerPump(t *testing.T) {
 	setupPeer := func(t *testing.T, alias string, msg proto.Message) *peer {
 		conn := makeMockWebRtcConnection()
 		p := makeClient(alias, conn)
-		p.IsAuthenticated = true
+		p.SetIsAuthenticated(true)
 
 		encodedMsg, err := proto.Marshal(msg)
 		require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readReliablePump(&state)
 
 		require.Len(t, state.topicQueue, 0)
@@ -214,7 +214,7 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readUnreliablePump(&state)
 
 		require.Len(t, state.topicQueue, 0)
@@ -232,11 +232,11 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readReliablePump(&state)
 
 		require.True(t, p.isClosed)
-		require.False(t, p.IsAuthenticated)
+		require.False(t, p.IsAuthenticated())
 	})
 
 	t.Run("client authentication accepted", func(t *testing.T) {
@@ -251,11 +251,11 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readReliablePump(&state)
 
 		require.True(t, p.isClosed)
-		require.True(t, p.IsAuthenticated)
+		require.True(t, p.IsAuthenticated())
 		require.False(t, p.isServer)
 	})
 
@@ -280,12 +280,12 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readReliablePump(&state)
 
 		require.True(t, authMessageGenerated)
 		require.True(t, p.isClosed)
-		require.True(t, p.IsAuthenticated)
+		require.True(t, p.IsAuthenticated())
 		require.True(t, p.isServer)
 
 		require.Len(t, p.sendReliable, 3)
@@ -303,11 +303,11 @@ func TestReadPeerPump(t *testing.T) {
 		}
 
 		p := setupPeer(t, "peer1", msg)
-		p.IsAuthenticated = false
+		p.SetIsAuthenticated(false)
 		p.readReliablePump(&state)
 
 		require.True(t, p.isClosed)
-		require.False(t, p.IsAuthenticated)
+		require.False(t, p.IsAuthenticated())
 		require.False(t, p.isServer)
 	})
 

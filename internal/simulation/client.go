@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"log"
+	"time"
 
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
@@ -9,6 +10,10 @@ import (
 	"github.com/pions/datachannel"
 	"github.com/pions/webrtc"
 	"github.com/pions/webrtc/pkg/ice"
+)
+
+const (
+	writeWait = 60 * time.Second
 )
 
 var webRtcConfig = webrtc.Configuration{
@@ -25,19 +30,21 @@ type WorldData struct {
 }
 
 type Client struct {
-	id                  string
-	coordinatorUrl      string
-	coordinator         *websocket.Conn
-	conn                *webrtc.PeerConnection
-	sendReliable        chan []byte
-	sendUnreliable      chan []byte
-	receivedReliable    chan []byte
-	receivedUnreliable  chan []byte
-	authMessage         chan []byte
-	stopReliableQueue   chan bool
-	stopUnreliableQueue chan bool
-	worldData           chan WorldData
-	topics              map[string]bool
+	id                 string
+	coordinatorUrl     string
+	coordinator        *websocket.Conn
+	conn               *webrtc.PeerConnection
+	sendReliable       chan []byte
+	sendUnreliable     chan []byte
+	receivedReliable   chan []byte
+	receivedUnreliable chan []byte
+	authMessage        chan []byte
+
+	coordinatorWriteQueue chan []byte
+	stopReliableQueue     chan bool
+	stopUnreliableQueue   chan bool
+	worldData             chan WorldData
+	topics                map[string]bool
 }
 
 func encodeChangeTopicMessage(msgType protocol.MessageType, topic string) ([]byte, error) {
@@ -91,18 +98,41 @@ func encodeAuthMessage(method string, role protocol.Role, data proto.Message) ([
 
 func MakeClient(id string, coordinatorUrl string) *Client {
 	c := &Client{
-		id:                  id,
-		coordinatorUrl:      coordinatorUrl,
-		authMessage:         make(chan []byte),
-		sendReliable:        make(chan []byte, 256),
-		sendUnreliable:      make(chan []byte, 256),
-		stopReliableQueue:   make(chan bool),
-		stopUnreliableQueue: make(chan bool),
-		worldData:           make(chan WorldData),
-		topics:              make(map[string]bool),
+		id:                    id,
+		coordinatorUrl:        coordinatorUrl,
+		authMessage:           make(chan []byte),
+		sendReliable:          make(chan []byte, 256),
+		sendUnreliable:        make(chan []byte, 256),
+		stopReliableQueue:     make(chan bool),
+		stopUnreliableQueue:   make(chan bool),
+		worldData:             make(chan WorldData),
+		topics:                make(map[string]bool),
+		coordinatorWriteQueue: make(chan []byte),
 	}
 
+	go c.CoordinatorWritePump()
 	return c
+}
+
+func (client *Client) CoordinatorWritePump() {
+	defer func() {
+		client.coordinator.Close()
+	}()
+
+	for {
+		select {
+		case bytes, ok := <-client.coordinatorWriteQueue:
+			client.coordinator.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				log.Println("channel closed")
+				return
+			}
+
+			if err := client.coordinator.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
+				log.Fatal("write coordinator message", err)
+			}
+		}
+	}
 }
 
 func (client *Client) startCoordination() error {
@@ -180,9 +210,8 @@ func (client *Client) startCoordination() error {
 			if err != nil {
 				log.Fatal("encode webrtc answer message failed", err)
 			}
-			if err := client.coordinator.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-				log.Fatal("write answer message", err)
-			}
+
+			client.coordinatorWriteQueue <- bytes
 		}
 	}
 }
@@ -202,9 +231,7 @@ func (client *Client) connect(serverAlias string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.coordinator.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-		return err
-	}
+	client.coordinatorWriteQueue <- bytes
 
 	conn.OnICEConnectionStateChange(func(connectionState ice.ConnectionState) {
 		log.Println("ICE Connection State has changed: ", connectionState.String())

@@ -36,7 +36,7 @@ func main() {
 	radius := *radiusP
 	subscribe := *subscribeP
 	authMethod := *authMethodP
-	for i := 1; i <= *nBotsP; i += 1 {
+	for i := 0; i <= *nBotsP; i += 1 {
 		var checkpoints [6]V3
 
 		for i := 0; i < len(checkpoints); i += 1 {

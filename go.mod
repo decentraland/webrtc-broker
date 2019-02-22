@@ -8,7 +8,7 @@ require (
 	github.com/pions/pkg v0.0.0-20181115215726-b60cd756f712 // indirect
 	github.com/pions/quic-go v0.10.2 // indirect
 	github.com/pions/sdp v1.3.0 // indirect
-	github.com/pions/webrtc v1.2.1-0.20190218202731-31fa14cd0d01
+	github.com/pions/webrtc v1.2.1-0.20190219201520-ad647c28d7ad
 	github.com/segmentio/ksuid v1.0.2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
