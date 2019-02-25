@@ -97,7 +97,7 @@ type WorldCommunicationState struct {
 	alias    string
 	aliasMux sync.RWMutex
 
-	subscriptions      map[string]bool
+	subscriptions    map[string]bool
 	subscriptionsMux sync.RWMutex
 }
 
@@ -138,7 +138,7 @@ func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) Wor
 		Auth:               authentication.Make(),
 		marshaller:         &protocol.Marshaller{},
 		log:                logging.New(),
-		webRtc:             &webrtc.WebRtc{},
+		webRtc:             webrtc.MakeWebRtc(),
 		agent:              worldCommAgent{agent: agent},
 		coordinator:        makeCoordinator(coordinatorUrl),
 		Peers:              make(map[string]*peer),
@@ -634,23 +634,23 @@ func processUnregister(state *WorldCommunicationState, alias string) {
 			// check if there is at least one other client subscription,
 			// if not, cancel it.
 			if !p.isServer && state.IsTopicSubscribed(topic) {
-					shouldRemoveTopic := true
+				shouldRemoveTopic := true
 
-					for alias := range peers {
-						p := state.Peers[alias]
+				for alias := range peers {
+					p := state.Peers[alias]
 
-						if !p.isServer {
-							shouldRemoveTopic = false
-							break
-						}
+					if !p.isServer {
+						shouldRemoveTopic = false
+						break
 					}
+				}
 
-					if shouldRemoveTopic {
-						broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
-						state.subscriptionsMux.Lock()
-						delete(state.subscriptions, topic)
-						state.subscriptionsMux.Unlock()
-					}
+				if shouldRemoveTopic {
+					broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
+					state.subscriptionsMux.Lock()
+					delete(state.subscriptions, topic)
+					state.subscriptionsMux.Unlock()
+				}
 			}
 		}
 	}
@@ -727,9 +727,9 @@ func processTopicChange(state *WorldCommunicationState, change *topicChange) {
 
 			if shouldRemoveTopic {
 				broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
-			state.subscriptionsMux.Lock()
+				state.subscriptionsMux.Lock()
 				delete(state.subscriptions, topic)
-			state.subscriptionsMux.Unlock()
+				state.subscriptionsMux.Unlock()
 			}
 		}
 	}

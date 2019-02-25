@@ -12,7 +12,7 @@ const (
 	writeWait                 = 10 * time.Second
 	pongWait                  = 60 * time.Second
 	pingPeriod                = 30 * time.Second
-	maxCoordinatorMessageSize = 1536 // NOTE let's adjust this later
+	maxCoordinatorMessageSize = 5000 // NOTE let's adjust this later
 )
 
 type Coordinator struct {

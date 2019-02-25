@@ -16,7 +16,6 @@ import (
 	"github.com/decentraland/communications-server-go/internal/worldcomm"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
-	pions "github.com/pions/webrtc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -396,8 +395,4 @@ func TestE2E(t *testing.T) {
 	require.Equal(t, c1.alias, topicMessage.GetFromAlias())
 
 	log.Println("TEST END")
-}
-
-func init() {
-	pions.DetachDataChannels()
 }

@@ -19,7 +19,7 @@ const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = 30 * time.Second
-	maxMessageSize = 1536 // NOTE let's adjust this later
+	maxMessageSize = 5000 // NOTE let's adjust this later
 )
 
 var UnauthorizedError = errors.New("unathorized")

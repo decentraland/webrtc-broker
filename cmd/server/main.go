@@ -9,7 +9,6 @@ import (
 	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/logging"
 	"github.com/decentraland/communications-server-go/internal/worldcomm"
-	"github.com/pions/webrtc"
 
 	_ "net/http/pprof"
 )
@@ -21,7 +20,7 @@ func main() {
 	appName := flag.String("appName", "dcl-comm-server", "")
 	reportCaller := flag.Bool("reportCaller", false, "")
 	logLevel := flag.String("logLevel", "debug", "")
-	authMethod := flag.String("authMethod", "secret", "") //TODO set a proper default
+	authMethod := flag.String("authMethod", "secret", "noop")
 	profilerEnabled := flag.Bool("profilerEnabled", false, "")
 	noopAuthEnabled := flag.Bool("noopAuthEnabled", false, "")
 	flag.Parse()
@@ -48,17 +47,16 @@ func main() {
 	}
 
 	u := fmt.Sprintf("%s/discover", *coordinatorUrl)
-	s := worldcomm.MakeState(agent, *authMethod, u)
+	worldCommState := worldcomm.MakeState(agent, *authMethod, u)
 
 	if *noopAuthEnabled {
-		s.Auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
+		worldCommState.Auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
 	}
 	log.Info("starting communication server node, - version:", *version)
 
-	webrtc.DetachDataChannels()
-	if err := worldcomm.ConnectCoordinator(&s); err != nil {
+	if err := worldcomm.ConnectCoordinator(&worldCommState); err != nil {
 		log.Fatal("connect coordinator failure ", err)
 	}
 
-	worldcomm.Process(&s)
+	worldcomm.Process(&worldCommState)
 }

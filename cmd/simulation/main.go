@@ -7,7 +7,6 @@ import (
 
 	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/simulation"
-	"github.com/pions/webrtc"
 )
 
 type V3 = simulation.V3
@@ -25,8 +24,6 @@ func main() {
 
 	log.Println("running random simulation")
 
-	webrtc.DetachDataChannels()
-
 	auth := authentication.Make()
 	auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
 
@@ -36,7 +33,7 @@ func main() {
 	radius := *radiusP
 	subscribe := *subscribeP
 	authMethod := *authMethodP
-	for i := 0; i <= *nBotsP; i += 1 {
+	for i := 0; i < *nBotsP; i += 1 {
 		var checkpoints [6]V3
 
 		for i := 0; i < len(checkpoints); i += 1 {

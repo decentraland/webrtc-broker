@@ -9,7 +9,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pions/datachannel"
 	"github.com/pions/webrtc"
-	"github.com/pions/webrtc/pkg/ice"
 )
 
 const (
@@ -219,7 +218,11 @@ func (client *Client) startCoordination() error {
 func (client *Client) connect(serverAlias string) error {
 	log.Println("client connect()")
 
-	conn, err := webrtc.NewPeerConnection(webRtcConfig)
+	s := webrtc.SettingEngine{}
+	s.DetachDataChannels()
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(s))
+
+	conn, err := api.NewPeerConnection(webRtcConfig)
 	if err != nil {
 		return err
 	}
@@ -233,9 +236,9 @@ func (client *Client) connect(serverAlias string) error {
 	}
 	client.coordinatorWriteQueue <- bytes
 
-	conn.OnICEConnectionStateChange(func(connectionState ice.ConnectionState) {
+	conn.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		log.Println("ICE Connection State has changed: ", connectionState.String())
-		if connectionState == ice.ConnectionStateDisconnected {
+		if connectionState == webrtc.ICEConnectionStateDisconnected {
 			conn.Close()
 		}
 	})

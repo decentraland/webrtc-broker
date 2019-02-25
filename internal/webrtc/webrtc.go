@@ -6,7 +6,6 @@ import (
 
 	"github.com/pions/datachannel"
 	_webrtc "github.com/pions/webrtc"
-	"github.com/pions/webrtc/pkg/ice"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -157,7 +156,7 @@ func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 }
 
 func (conn *webRtcConnection) OnIceCandidate(sdp string) error {
-	if err := conn.conn.AddICECandidate(sdp); err != nil {
+	if err := conn.conn.AddICECandidate(_webrtc.ICECandidateInit{Candidate: sdp}); err != nil {
 		log.WithError(err).Error("error adding ice candidate")
 		return err
 	}
@@ -213,10 +212,20 @@ type IWebRtc interface {
 	NewConnection() (IWebRtcConnection, error)
 }
 
-type WebRtc struct{}
+type WebRtc struct {
+	api *_webrtc.API
+}
 
-func (*WebRtc) NewConnection() (IWebRtcConnection, error) {
-	conn, err := _webrtc.NewPeerConnection(config)
+func MakeWebRtc() *WebRtc {
+	s := _webrtc.SettingEngine{}
+	s.DetachDataChannels()
+
+	api := _webrtc.NewAPI(_webrtc.WithSettingEngine(s))
+	return &WebRtc{api: api}
+}
+
+func (w *WebRtc) NewConnection() (IWebRtcConnection, error) {
+	conn, err := w.api.NewPeerConnection(config)
 	if err != nil {
 		log.WithError(err).Error("cannot create a new webrtc connection")
 		return nil, err
@@ -232,9 +241,9 @@ func (*WebRtc) NewConnection() (IWebRtcConnection, error) {
 		return nil, err
 	}
 
-	conn.OnICEConnectionStateChange(func(connectionState ice.ConnectionState) {
+	conn.OnICEConnectionStateChange(func(connectionState _webrtc.ICEConnectionState) {
 		log.WithField("iceConnectionState", connectionState.String()).Debug("ICE Connection State has changed:")
-		if connectionState == ice.ConnectionStateDisconnected {
+		if connectionState == _webrtc.ICEConnectionStateDisconnected {
 			log.Debug("Connection state is disconnected, close connection")
 			conn.Close()
 		}
