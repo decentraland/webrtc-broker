@@ -13,6 +13,7 @@ test: build
 github.com/decentraland/communications-server-go/internal/worldcomm \
 github.com/decentraland/communications-server-go/internal/coordinator
 
+
 cover: TEST_FLAGS=-coverprofile=coverage.out
 cover: test
 
@@ -27,9 +28,6 @@ vtest-integration: test-integration
 
 vtest: TEST_FLAGS=-v
 vtest: test
-
-bench:
-	go test -bench . github.com/decentraland/communications-server-go/internal/worldcomm
 
 fmt:
 	gofmt -w .

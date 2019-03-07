@@ -2,6 +2,7 @@ package worldcomm
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/decentraland/communications-server-go/internal/agent"
@@ -42,7 +43,7 @@ func makeClient(alias string, conn *MockWebRtcConnection) *peer {
 		conn:           conn,
 		sendReliable:   make(chan []byte, 256),
 		sendUnreliable: make(chan []byte, 256),
-		Topics:         make(map[string]bool),
+		Topics:         make(map[string]struct{}),
 	}
 }
 
@@ -53,15 +54,142 @@ func makeServer(alias string, conn *MockWebRtcConnection) *peer {
 }
 
 func addPeer(state *WorldCommunicationState, p *peer) *peer {
-	state.Peers[p.alias] = p
+	state.Peers = append(state.Peers, p)
 	return p
+}
+
+func TestTopicSubscriptions(t *testing.T) {
+
+	t.Run("add client subscription", func(t *testing.T) {
+		c1 := makeClient("peer1", nil)
+		c2 := makeClient("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+
+		require.True(t, subscriptions.AddClientSubscription("topic1", c1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].clients, c1)
+		require.Len(t, subscriptions["topic1"].clients, 1)
+		require.Len(t, subscriptions["topic1"].servers, 0)
+
+		require.False(t, subscriptions.AddClientSubscription("topic1", c2))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].clients, c1)
+		require.Contains(t, subscriptions["topic1"].clients, c2)
+		require.Len(t, subscriptions["topic1"].clients, 2)
+		require.Len(t, subscriptions["topic1"].servers, 0)
+	})
+
+	t.Run("add server subscription", func(t *testing.T) {
+		s1 := makeServer("peer1", nil)
+		s2 := makeServer("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+
+		require.True(t, subscriptions.AddServerSubscription("topic1", s1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].servers, s1)
+		require.Len(t, subscriptions["topic1"].clients, 0)
+		require.Len(t, subscriptions["topic1"].servers, 1)
+
+		require.False(t, subscriptions.AddServerSubscription("topic1", s2))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].servers, s1)
+		require.Contains(t, subscriptions["topic1"].servers, s2)
+		require.Len(t, subscriptions["topic1"].clients, 0)
+		require.Len(t, subscriptions["topic1"].servers, 2)
+	})
+
+	t.Run("remove client subscription", func(t *testing.T) {
+		c1 := makeClient("peer1", nil)
+		c2 := makeClient("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+		subscriptions["topic1"] = &topicSubscription{
+			clients: []*peer{c1, c2},
+			servers: make([]*peer, 0),
+		}
+
+		require.False(t, subscriptions.RemoveClientSubscription("topic1", c1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].clients, c2)
+		require.Len(t, subscriptions["topic1"].clients, 1)
+		require.Len(t, subscriptions["topic1"].servers, 0)
+
+		require.True(t, subscriptions.RemoveClientSubscription("topic1", c2))
+
+		require.NotContains(t, subscriptions, "topic1")
+	})
+
+	t.Run("remove server subscription", func(t *testing.T) {
+		s1 := makeServer("peer1", nil)
+		s2 := makeServer("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+		subscriptions["topic1"] = &topicSubscription{
+			clients: make([]*peer, 0),
+			servers: []*peer{s1, s2},
+		}
+
+		require.False(t, subscriptions.RemoveServerSubscription("topic1", s1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Contains(t, subscriptions["topic1"].servers, s2)
+		require.Len(t, subscriptions["topic1"].clients, 0)
+		require.Len(t, subscriptions["topic1"].servers, 1)
+
+		require.True(t, subscriptions.RemoveServerSubscription("topic1", s2))
+
+		require.NotContains(t, subscriptions, "topic1")
+	})
+
+	t.Run("remove client subscription, but server left", func(t *testing.T) {
+		c1 := makeClient("peer1", nil)
+		s1 := makeServer("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+		subscriptions["topic1"] = &topicSubscription{
+			clients: []*peer{c1},
+			servers: []*peer{s1},
+		}
+
+		require.False(t, subscriptions.RemoveClientSubscription("topic1", c1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Len(t, subscriptions["topic1"].clients, 0)
+		require.Len(t, subscriptions["topic1"].servers, 1)
+
+		require.True(t, subscriptions.RemoveServerSubscription("topic1", s1))
+
+		require.NotContains(t, subscriptions, "topic1")
+	})
+
+	t.Run("remove server subscription, but client left", func(t *testing.T) {
+		c1 := makeClient("peer1", nil)
+		s1 := makeServer("peer2", nil)
+		subscriptions := make(topicSubscriptions)
+		subscriptions["topic1"] = &topicSubscription{
+			clients: []*peer{c1},
+			servers: []*peer{s1},
+		}
+
+		require.False(t, subscriptions.RemoveServerSubscription("topic1", s1))
+
+		require.Contains(t, subscriptions, "topic1")
+		require.Len(t, subscriptions["topic1"].clients, 1)
+		require.Len(t, subscriptions["topic1"].servers, 0)
+
+		require.True(t, subscriptions.RemoveClientSubscription("topic1", c1))
+
+		require.NotContains(t, subscriptions, "topic1")
+	})
 }
 
 func TestPeerWritePump(t *testing.T) {
 	msg, err := proto.Marshal(&protocol.PingMessage{})
 	require.NoError(t, err)
 
-	setup := func(write func(conn *MockWebRtcConnection, bytes []byte) error) (*peer, WorldCommunicationState) {
+	setup := func(write func(conn *MockWebRtcConnection, rawMsg []byte) error) (*peer, WorldCommunicationState) {
 		conn := makeMockWebRtcConnection()
 
 		conn.WriteReliable_ = write
@@ -74,8 +202,8 @@ func TestPeerWritePump(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		i := 0
-		write := func(conn *MockWebRtcConnection, bytes []byte) error {
-			require.Equal(t, bytes, msg)
+		write := func(conn *MockWebRtcConnection, rawMsg []byte) error {
+			require.Equal(t, rawMsg, msg)
 			if i == 3 {
 				return errors.New("stop")
 			}
@@ -98,7 +226,7 @@ func TestPeerWritePump(t *testing.T) {
 	})
 
 	t.Run("on reliable channel first write error", func(t *testing.T) {
-		write := func(conn *MockWebRtcConnection, bytes []byte) error {
+		write := func(conn *MockWebRtcConnection, rawMsg []byte) error {
 			return errors.New("stop")
 		}
 		p, state := setup(write)
@@ -112,7 +240,7 @@ func TestPeerWritePump(t *testing.T) {
 
 	t.Run("on reliable channel inner write error", func(t *testing.T) {
 		i := 0
-		write := func(conn *MockWebRtcConnection, bytes []byte) error {
+		write := func(conn *MockWebRtcConnection, rawMsg []byte) error {
 			if i == 1 {
 				return errors.New("stop")
 			}
@@ -130,7 +258,7 @@ func TestPeerWritePump(t *testing.T) {
 	})
 
 	t.Run("on unreliable channel first write error", func(t *testing.T) {
-		write := func(conn *MockWebRtcConnection, bytes []byte) error {
+		write := func(conn *MockWebRtcConnection, rawMsg []byte) error {
 			return errors.New("stop")
 		}
 		p, state := setup(write)
@@ -144,7 +272,7 @@ func TestPeerWritePump(t *testing.T) {
 
 	t.Run("on unreliable channel inner write error", func(t *testing.T) {
 		i := 0
-		write := func(conn *MockWebRtcConnection, bytes []byte) error {
+		write := func(conn *MockWebRtcConnection, rawMsg []byte) error {
 			if i == 1 {
 				return errors.New("stop")
 			}
@@ -172,10 +300,10 @@ func TestReadPeerPump(t *testing.T) {
 		require.NoError(t, err)
 
 		i := 0
-		read := func(conn *MockWebRtcConnection, bytes []byte) (int, error) {
+		read := func(conn *MockWebRtcConnection, rawMsg []byte) (int, error) {
 			if i == 0 {
 				i += 1
-				copy(bytes, encodedMsg)
+				copy(rawMsg, encodedMsg)
 				return len(encodedMsg), nil
 			}
 
@@ -191,8 +319,8 @@ func TestReadPeerPump(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
-		msg := &protocol.ChangeTopicMessage{
-			Type:  protocol.MessageType_ADD_TOPIC,
+		msg := &protocol.TopicMessage{
+			Type:  protocol.MessageType_TOPIC,
 			Topic: "topic1",
 		}
 
@@ -208,8 +336,8 @@ func TestReadPeerPump(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
-		msg := &protocol.ChangeTopicMessage{
-			Type:  protocol.MessageType_ADD_TOPIC,
+		msg := &protocol.TopicMessage{
+			Type:  protocol.MessageType_TOPIC,
 			Topic: "topic1",
 		}
 
@@ -263,8 +391,6 @@ func TestReadPeerPump(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
-		state.subscriptions["topic1"] = true
-		state.subscriptions["topic2"] = true
 		auth := setupSimpleAuthenticator(&state, "testAuth", true)
 
 		authMessageGenerated := false
@@ -288,7 +414,7 @@ func TestReadPeerPump(t *testing.T) {
 		require.True(t, p.IsAuthenticated())
 		require.True(t, p.isServer)
 
-		require.Len(t, p.sendReliable, 3)
+		require.Len(t, p.sendReliable, 1)
 	})
 
 	t.Run("authentication rejected", func(t *testing.T) {
@@ -311,13 +437,14 @@ func TestReadPeerPump(t *testing.T) {
 		require.False(t, p.isServer)
 	})
 
-	t.Run("add topic message", func(t *testing.T) {
+	t.Run("topic subscription message", func(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
-		msg := &protocol.ChangeTopicMessage{
-			Type:  protocol.MessageType_ADD_TOPIC,
-			Topic: "topic1",
+		msg := &protocol.TopicSubscriptionMessage{
+			Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+			Format: protocol.Format_PLAIN,
+			Topics: []byte("topic1 topic2"),
 		}
 
 		p := setupPeer(t, "peer1", msg)
@@ -325,31 +452,11 @@ func TestReadPeerPump(t *testing.T) {
 
 		require.Len(t, state.topicQueue, 1)
 		change := <-state.topicQueue
-		require.Equal(t, AddTopic, change.op)
-		require.Equal(t, "peer1", change.alias)
-		require.Equal(t, "topic1", change.topic)
+		require.Equal(t, "peer1", change.peer.alias)
+		require.Equal(t, change.rawTopics, msg.Topics)
 	})
 
-	t.Run("remove topic message", func(t *testing.T) {
-		state := makeTestState(t)
-		defer closeState(&state)
-
-		msg := &protocol.ChangeTopicMessage{
-			Type:  protocol.MessageType_REMOVE_TOPIC,
-			Topic: "topic1",
-		}
-
-		p := setupPeer(t, "peer1", msg)
-		p.readReliablePump(&state)
-
-		require.Len(t, state.topicQueue, 1)
-		change := <-state.topicQueue
-		require.Equal(t, RemoveTopic, change.op)
-		require.Equal(t, "peer1", change.alias)
-		require.Equal(t, "topic1", change.topic)
-	})
-
-	t.Run("reliable topic message", func(t *testing.T) {
+	t.Run("reliable topic message (client)", func(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
@@ -363,7 +470,26 @@ func TestReadPeerPump(t *testing.T) {
 
 		require.Len(t, state.messagesQueue, 1)
 		peerMessage := <-state.messagesQueue
-		require.Equal(t, "peer1", peerMessage.from)
+		require.Equal(t, peerMessage.from, p)
+		require.Equal(t, "topic1", peerMessage.topic)
+	})
+
+	t.Run("reliable topic message (server)", func(t *testing.T) {
+		state := makeTestState(t)
+		defer closeState(&state)
+
+		msg := &protocol.TopicMessage{
+			Type:  protocol.MessageType_TOPIC,
+			Topic: "topic1",
+		}
+
+		p := setupPeer(t, "peer1", msg)
+		p.isServer = true
+		p.readReliablePump(&state)
+
+		require.Len(t, state.messagesQueue, 1)
+		peerMessage := <-state.messagesQueue
+		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 	})
 
@@ -381,7 +507,7 @@ func TestReadPeerPump(t *testing.T) {
 
 		require.Len(t, state.messagesQueue, 1)
 		peerMessage := <-state.messagesQueue
-		require.Equal(t, "peer1", peerMessage.from)
+		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 	})
 }
@@ -438,23 +564,6 @@ func TestProcessConnect(t *testing.T) {
 }
 
 func TestProcessTopicChange(t *testing.T) {
-	t.Run("no peer", func(t *testing.T) {
-		state := makeTestState(t)
-		defer closeState(&state)
-
-		state.topicQueue <- &topicChange{
-			op:    AddTopic,
-			alias: "peer1",
-			topic: "topic1",
-		}
-
-		state.softStop = true
-
-		Process(&state)
-
-		require.Len(t, state.peersIndex, 0)
-	})
-
 	t.Run("add topic from clients", func(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
@@ -463,30 +572,30 @@ func TestProcessTopicChange(t *testing.T) {
 		p2 := addPeer(&state, makeClient("peer2", nil))
 		p3 := addPeer(&state, makeServer("peer3", nil))
 
-		state.topicQueue <- &topicChange{
-			op:    AddTopic,
-			alias: "peer1",
-			topic: "topic1",
+		state.topicQueue <- topicChange{
+			peer:      p1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte("topic1"),
 		}
-		state.topicQueue <- &topicChange{
-			op:    AddTopic,
-			alias: "peer2",
-			topic: "topic1",
+		state.topicQueue <- topicChange{
+			peer:      p2,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte("topic1"),
 		}
 		state.softStop = true
 
 		Process(&state)
 
-		require.Len(t, state.peersIndex, 1)
-		require.Contains(t, state.peersIndex, "topic1")
-
 		// NOTE server should subscribe to topic and send the add topic message to
 		// the others connected servers
 		require.Len(t, state.subscriptions, 1)
 		require.Contains(t, state.subscriptions, "topic1")
+		require.Len(t, state.subscriptions["topic1"].clients, 2)
+		require.Len(t, state.subscriptions["topic1"].servers, 0)
+		require.Contains(t, state.subscriptions["topic1"].clients, p1)
+		require.Contains(t, state.subscriptions["topic1"].clients, p2)
 		require.Len(t, p3.sendReliable, 1)
 
-		require.Contains(t, state.peersIndex["topic1"], "peer1")
 		require.Len(t, p1.Topics, 1)
 		require.Contains(t, p1.Topics, "topic1")
 		require.Len(t, p2.Topics, 1)
@@ -500,23 +609,21 @@ func TestProcessTopicChange(t *testing.T) {
 		p1 := addPeer(&state, makeServer("peer1", nil))
 		p2 := addPeer(&state, makeServer("peer2", nil))
 
-		state.topicQueue <- &topicChange{
-			op:    AddTopic,
-			alias: "peer1",
-			topic: "topic1",
+		state.topicQueue <- topicChange{
+			peer:      p1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte("topic1"),
 		}
 		state.softStop = true
 
 		Process(&state)
 
-		require.Len(t, state.peersIndex, 1)
-		require.Contains(t, state.peersIndex, "topic1")
+		require.Len(t, state.subscriptions["topic1"].clients, 0)
+		require.Len(t, state.subscriptions["topic1"].servers, 1)
+		require.Contains(t, state.subscriptions["topic1"].servers, p1)
 
-		// NOTE: no subscriptions from server
-		require.Len(t, state.subscriptions, 0)
 		require.Len(t, p2.sendReliable, 0)
 
-		require.Contains(t, state.peersIndex["topic1"], "peer1")
 		require.Len(t, p1.Topics, 1)
 		require.Contains(t, p1.Topics, "topic1")
 	})
@@ -525,43 +632,37 @@ func TestProcessTopicChange(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
-		state.subscriptions["topic1"] = true
-
 		p1 := addPeer(&state, makeClient("peer1", nil))
-		p1.Topics["topic1"] = true
-
+		p1.Topics["topic1"] = struct{}{}
 		p2 := addPeer(&state, makeClient("peer2", nil))
-		p2.Topics["topic1"] = true
-
+		p2.Topics["topic1"] = struct{}{}
 		p3 := addPeer(&state, makeServer("peer3", nil))
 
-		state.peersIndex["topic1"] = map[string]bool{"peer1": true, "peer2": true}
+		state.subscriptions.AddClientSubscription("topic1", p1)
+		state.subscriptions.AddClientSubscription("topic1", p2)
 
-		state.topicQueue <- &topicChange{
-			op:    RemoveTopic,
-			alias: "peer1",
-			topic: "topic1",
+		state.topicQueue <- topicChange{
+			peer:      p1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte(""),
 		}
 
-		state.topicQueue <- &topicChange{
-			op:    RemoveTopic,
-			alias: "peer2",
-			topic: "topic1",
+		state.topicQueue <- topicChange{
+			peer:      p2,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte(""),
 		}
 
 		state.softStop = true
 
 		Process(&state)
 
-		// NOTE server should unsubscribe to topic and send the remove topic message to
-		// the others connected servers
 		require.Len(t, state.subscriptions, 0)
-		require.Len(t, p3.sendReliable, 1)
-
-		require.Len(t, state.peersIndex, 1)
-		require.Contains(t, state.peersIndex, "topic1")
-		require.Len(t, state.peersIndex["topic1"], 0)
 		require.Len(t, p1.Topics, 0)
+		require.Len(t, p2.Topics, 0)
+
+		// NOTE: topics broadcasted
+		require.Len(t, p3.sendReliable, 1)
 	})
 }
 
@@ -570,22 +671,22 @@ func TestUnregister(t *testing.T) {
 	defer closeState(&state)
 
 	p := addPeer(&state, makeClient("peer1", nil))
-	p.Topics["topic1"] = true
+	p.Topics["topic1"] = struct{}{}
 
 	p2 := addPeer(&state, makeClient("peer2", nil))
-	p2.Topics["topic1"] = true
+	p2.Topics["topic1"] = struct{}{}
 
-	state.peersIndex["topic1"] = map[string]bool{"peer1": true, "peer2": true}
+	state.subscriptions.AddClientSubscription("topic1", p)
+	state.subscriptions.AddClientSubscription("topic1", p2)
 
-	state.unregisterQueue <- p.alias
-	state.unregisterQueue <- p2.alias
+	state.unregisterQueue <- p
+	state.unregisterQueue <- p2
 	state.softStop = true
 
 	Process(&state)
 
 	require.Len(t, state.Peers, 0)
-	require.Len(t, state.peersIndex, 1)
-	require.Len(t, state.peersIndex["topic1"], 0)
+	require.Len(t, state.subscriptions, 0)
 }
 
 func TestProcessWebRtcMessage(t *testing.T) {
@@ -621,7 +722,8 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		require.Equal(t, 1, i)
 		require.Len(t, state.coordinator.send, 1)
-		require.Contains(t, state.Peers, "peer1")
+		require.Len(t, state.Peers, 1)
+		require.Equal(t, state.Peers[0].alias, "peer1")
 	})
 
 	t.Run("webrtc offer", func(t *testing.T) {
@@ -747,44 +849,31 @@ func TestProcessWebRtcMessage(t *testing.T) {
 }
 
 func TestProcessPeerMessage(t *testing.T) {
-	t.Run("no peers", func(t *testing.T) {
-		state := makeTestState(t)
-		defer closeState(&state)
-
-		state.messagesQueue <- &peerMessage{
-			topic: "topic1",
-			from:  "peer1",
-			bytes: []byte{},
-		}
-	})
-
 	t.Run("success", func(t *testing.T) {
 		state := makeTestState(t)
 		defer closeState(&state)
 
 		conn1 := makeMockWebRtcConnection()
 		p1 := addPeer(&state, makeClient("peer1", conn1))
-		p1.Topics["topic1"] = true
+		p1.Topics["topic1"] = struct{}{}
 
 		conn2 := makeMockWebRtcConnection()
 		p2 := addPeer(&state, makeClient("peer2", conn2))
-		p2.Topics["topic1"] = true
+		p2.Topics["topic1"] = struct{}{}
 
 		conn3 := makeMockWebRtcConnection()
 		p3 := addPeer(&state, makeClient("peer3", conn3))
 
 		conn4 := makeMockWebRtcConnection()
 		p4 := addPeer(&state, makeClient("peer4", conn4))
-		p4.Topics["topic1"] = true
+		p4.Topics["topic1"] = struct{}{}
 		p4.isClosed = true
 
-		state.peersIndex["topic1"] = map[string]bool{
-			"peer1": true,
-			"peer2": true,
-			"peer4": true,
-		}
+		state.subscriptions.AddClientSubscription("topic1", p1)
+		state.subscriptions.AddClientSubscription("topic1", p2)
+		state.subscriptions.AddClientSubscription("topic1", p4)
 
-		bytes, err := proto.Marshal(&protocol.TopicMessage{
+		rawMsg, err := proto.Marshal(&protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
 			Topic: "topic1",
 		})
@@ -793,8 +882,8 @@ func TestProcessPeerMessage(t *testing.T) {
 		state.messagesQueue <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
-			from:     "peer1",
-			bytes:    bytes,
+			from:     p1,
+			rawMsg:   rawMsg,
 		}
 
 		state.softStop = true
@@ -813,18 +902,16 @@ func TestProcessPeerMessage(t *testing.T) {
 
 		conn1 := makeMockWebRtcConnection()
 		p1 := addPeer(&state, makeClient("peer1", conn1))
-		p1.Topics["topic1"] = true
+		p1.Topics["topic1"] = struct{}{}
 
 		conn2 := makeMockWebRtcConnection()
 		p2 := addPeer(&state, makeClient("peer2", conn2))
-		p2.Topics["topic1"] = true
+		p2.Topics["topic1"] = struct{}{}
 
-		state.peersIndex["topic1"] = map[string]bool{
-			"peer1": true,
-			"peer2": true,
-		}
+		state.subscriptions.AddClientSubscription("topic1", p1)
+		state.subscriptions.AddClientSubscription("topic1", p2)
 
-		bytes, err := proto.Marshal(&protocol.TopicMessage{
+		rawMsg, err := proto.Marshal(&protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
 			Topic: "topic1",
 		})
@@ -833,15 +920,15 @@ func TestProcessPeerMessage(t *testing.T) {
 		state.messagesQueue <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
-			from:     "peer1",
-			bytes:    bytes,
+			from:     p1,
+			rawMsg:   rawMsg,
 		}
 
 		state.messagesQueue <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
-			from:     "peer1",
-			bytes:    bytes,
+			from:     p1,
+			rawMsg:   rawMsg,
 		}
 
 		state.softStop = true
@@ -851,4 +938,139 @@ func TestProcessPeerMessage(t *testing.T) {
 		require.Len(t, p1.sendReliable, 0) // NOTE don't send it to itself
 		require.Len(t, p2.sendReliable, 2) // NOTE p2 is ready and it's listening to the topic
 	})
+}
+
+func TestProcessServerRegistered(t *testing.T) {
+	t.Run("no subscriptions", func(t *testing.T) {
+		state := makeTestState(t)
+		defer closeState(&state)
+
+		s1 := makeServer("peer1", nil)
+		s2 := makeServer("peer2", nil)
+
+		state.serverRegisteredQueue <- s1
+		state.serverRegisteredQueue <- s2
+		state.softStop = true
+
+		Process(&state)
+
+		require.Len(t, s1.sendReliable, 1)
+		require.Len(t, s2.sendReliable, 1)
+
+		message := &protocol.TopicSubscriptionMessage{}
+
+		rawMsg := <-s1.sendReliable
+		require.NoError(t, proto.Unmarshal(rawMsg, message))
+		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
+		require.Equal(t, protocol.Format_ZIP, message.Format)
+		rawTopics, err := state.zipper.Unzip(message.Topics)
+		require.NoError(t, err)
+		require.Len(t, rawTopics, 0)
+
+		rawMsg = <-s2.sendReliable
+		require.NoError(t, proto.Unmarshal(rawMsg, message))
+		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
+		rawTopics, err = state.zipper.Unzip(message.Topics)
+		require.NoError(t, err)
+		require.Len(t, rawTopics, 0)
+	})
+
+	t.Run("with subscriptions", func(t *testing.T) {
+		state := makeTestState(t)
+		defer closeState(&state)
+
+		c1 := makeClient("peer1", nil)
+		s1 := makeServer("peer2", nil)
+		s2 := makeServer("peer3", nil)
+
+		state.subscriptions.AddClientSubscription("topic1", c1)
+		state.subscriptions.AddClientSubscription("topic2", c1)
+
+		state.serverRegisteredQueue <- s1
+		state.serverRegisteredQueue <- s2
+		state.softStop = true
+
+		Process(&state)
+
+		require.Len(t, s1.sendReliable, 1)
+		require.Len(t, s2.sendReliable, 1)
+
+		message := &protocol.TopicSubscriptionMessage{}
+
+		rawMsg := <-s1.sendReliable
+		require.NoError(t, proto.Unmarshal(rawMsg, message))
+		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
+		require.Equal(t, protocol.Format_ZIP, message.Format)
+		rawTopics, err := state.zipper.Unzip(message.Topics)
+		require.NoError(t, err)
+		topics := strings.Split(string(rawTopics), " ")
+		require.Len(t, topics, 2)
+		require.Contains(t, topics, "topic1")
+		require.Contains(t, topics, "topic2")
+
+		rawMsg = <-s2.sendReliable
+		require.NoError(t, proto.Unmarshal(rawMsg, message))
+		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
+		rawTopics, err = state.zipper.Unzip(message.Topics)
+		require.NoError(t, err)
+		topics = strings.Split(string(rawTopics), " ")
+		require.Len(t, topics, 2)
+		require.Contains(t, topics, "topic1")
+		require.Contains(t, topics, "topic2")
+	})
+}
+
+func BenchmarkProcessTopicChange(b *testing.B) {
+	agent, err := agent.Make(appName, "")
+	require.NoError(b, err)
+
+	state := MakeState(agent, "testAuth", "")
+	defer closeState(&state)
+
+	s1 := addPeer(&state, makeClient("peer1", nil))
+	c1 := addPeer(&state, makeClient("peer2", nil))
+
+	topics1 := []byte("topic1 topic2 topic3 topic4 topic5")
+	topics2 := []byte("topic5")
+	topics3 := []byte("topic5 topic6 topic7")
+	empty := []byte("")
+
+	changes := []topicChange{
+		topicChange{
+			peer:      s1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: topics1,
+		},
+		topicChange{
+			peer:      c1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: topics1,
+		},
+		topicChange{
+			peer:      c1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: topics2,
+		},
+		topicChange{
+			peer:      c1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: topics3,
+		},
+		topicChange{
+			peer:      c1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: empty,
+		},
+		topicChange{
+			peer:      s1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: empty,
+		},
+	}
+
+	for i := 0; i < b.N; i++ {
+		for _, c := range changes {
+			ProcessTopicChange(&state, c)
+		}
+	}
 }

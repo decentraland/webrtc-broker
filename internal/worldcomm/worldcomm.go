@@ -1,43 +1,38 @@
 package worldcomm
 
 import (
+	"bytes"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/decentraland/communications-server-go/internal/agent"
 	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/logging"
+	"github.com/decentraland/communications-server-go/internal/utils"
 	"github.com/decentraland/communications-server-go/internal/webrtc"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 )
 
 const (
-	maxWorldCommMessageSize = 1024
+	maxWorldCommMessageSize = 5120
 	logTopicMessageReceived = false
-	logAddTopic             = false
-	logRemoveTopic          = false
-)
-
-type TopicOp int
-
-const (
-	AddTopic TopicOp = iota + 1
-	RemoveTopic
+	logTopicSubscription    = false
 )
 
 type topicChange struct {
-	op    TopicOp
-	alias string
-	topic string
+	peer      *peer
+	format    protocol.Format
+	rawTopics []byte
 }
 
 type peerMessage struct {
 	fromServer bool
 	reliable   bool
 	topic      string
-	from       string
-	bytes      []byte
+	from       *peer
+	rawMsg     []byte
 }
 
 type peer struct {
@@ -54,7 +49,12 @@ type peer struct {
 	isClosedMux sync.RWMutex
 	isClosed    bool
 
-	Topics map[string]bool
+	Topics map[string]struct{}
+}
+
+func (p *peer) hasTopic(topic string) bool {
+	_, ok := p.Topics[topic]
+	return ok
 }
 
 func (p *peer) IsAuthenticated() bool {
@@ -69,7 +69,110 @@ func (p *peer) SetIsAuthenticated(isAuthenticated bool) {
 	p.isAuthenticated = isAuthenticated
 }
 
-type PeersIndex = map[string]map[string]bool
+type topicSubscription struct {
+	clients []*peer
+	servers []*peer
+}
+
+func (s *topicSubscription) isEmpty() bool {
+	return len(s.clients) == 0 && len(s.servers) == 0
+}
+
+type topicSubscriptions map[string]*topicSubscription
+
+func (ts *topicSubscriptions) AddClientSubscription(topic string, client *peer) (subscriptionChanged bool) {
+	s, ok := (*ts)[topic]
+
+	if ok {
+		s.clients = append(s.clients, client)
+		return false
+	}
+
+	s = &topicSubscription{
+		clients: make([]*peer, 1),
+		servers: make([]*peer, 0),
+	}
+
+	s.clients[0] = client
+	(*ts)[topic] = s
+
+	return true
+}
+
+func (ts *topicSubscriptions) AddServerSubscription(topic string, server *peer) (subscriptionChanged bool) {
+	s, ok := (*ts)[topic]
+
+	if ok {
+		s.servers = append(s.servers, server)
+		return false
+	}
+
+	s = &topicSubscription{
+		clients: make([]*peer, 0),
+		servers: make([]*peer, 1),
+	}
+
+	s.servers[0] = server
+	(*ts)[topic] = s
+
+	return true
+}
+
+func (ts *topicSubscriptions) RemoveClientSubscription(topic string, client *peer) (subscriptionChanged bool) {
+	s, ok := (*ts)[topic]
+
+	if !ok {
+		return false
+	}
+
+	s.clients = removePeer(s.clients, client)
+
+	if s.isEmpty() {
+		delete(*ts, topic)
+		return true
+	} else {
+		return false
+	}
+}
+
+func (ts *topicSubscriptions) RemoveServerSubscription(topic string, server *peer) (subscriptionChanged bool) {
+	s, ok := (*ts)[topic]
+
+	if !ok {
+		return false
+	}
+
+	s.servers = removePeer(s.servers, server)
+
+	if s.isEmpty() {
+		delete(*ts, topic)
+		return true
+	} else {
+		return false
+	}
+}
+
+func removePeer(peers []*peer, p *peer) []*peer {
+	for i, peer := range peers {
+		if p == peer {
+			size := len(peers)
+			peers[size-1], peers[i] = peers[i], peers[size-1]
+			return peers[:size-1]
+		}
+	}
+
+	return peers
+}
+
+func findPeer(peers []*peer, alias string) *peer {
+	for _, p := range peers {
+		if p.alias == alias {
+			return p
+		}
+	}
+
+	return nil
+}
 
 type WorldCommunicationState struct {
 	// NOTE: dependencies
@@ -79,38 +182,32 @@ type WorldCommunicationState struct {
 	agent      worldCommAgent
 	webRtc     webrtc.IWebRtc
 	Reporter   IReporter
+	zipper     utils.ZipCompression
 
-	authMethod         string
-	coordinator        *Coordinator
-	Peers              map[string]*peer
-	peersIndex         PeersIndex
-	topicQueue         chan *topicChange
-	connectQueue       chan string
-	webRtcControlQueue chan *protocol.WebRtcMessage
-	messagesQueue      chan *peerMessage
-	unregisterQueue    chan string
-	aliasChannel       chan string
-	stop               chan bool
-	softStop           bool
-	ReportPeriod       time.Duration
+	authMethod            string
+	coordinator           *Coordinator
+	Peers                 []*peer
+	topicQueue            chan topicChange
+	connectQueue          chan string
+	webRtcControlQueue    chan *protocol.WebRtcMessage
+	messagesQueue         chan *peerMessage
+	unregisterQueue       chan *peer
+	serverRegisteredQueue chan *peer
+	aliasChannel          chan string
+	stop                  chan bool
+	softStop              bool
+	ReportPeriod          time.Duration
 
 	alias    string
 	aliasMux sync.RWMutex
 
-	subscriptions    map[string]bool
-	subscriptionsMux sync.RWMutex
+	subscriptions topicSubscriptions
 }
 
 func (s *WorldCommunicationState) GetAlias() string {
 	s.aliasMux.RLock()
 	defer s.aliasMux.RUnlock()
 	return s.alias
-}
-
-func (s *WorldCommunicationState) IsTopicSubscribed(topic string) bool {
-	s.subscriptionsMux.RLock()
-	defer s.subscriptionsMux.RUnlock()
-	return s.subscriptions[topic]
 }
 
 type IReporter interface {
@@ -124,35 +221,44 @@ func (r *defaultReporter) Report(state *WorldCommunicationState) {
 	state.agent.RecordTotalPeerConnections(peersCount)
 	state.agent.RecordTotalTopicSubscriptions(peersCount)
 
-	state.subscriptionsMux.RLock()
 	state.log.WithFields(logging.Fields{
 		"peers count":  peersCount,
 		"topics count": len(state.subscriptions),
-	}).Debug("report")
-	state.subscriptionsMux.RUnlock()
+	}).Info("report")
+
+	state.log.WithFields(logging.Fields{
+		"topicQ_size":            len(state.topicQueue),
+		"connectQ_size":          len(state.connectQueue),
+		"webrtc_controlQ_size":   len(state.webRtcControlQueue),
+		"messagesQ_size":         len(state.messagesQueue),
+		"unregisterQ_size":       len(state.unregisterQueue),
+		"serverRegisteredQ_size": len(state.serverRegisteredQueue),
+	}).Info("queue status")
+
 }
 
 func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) WorldCommunicationState {
 	return WorldCommunicationState{
-		authMethod:         authMethod,
-		Auth:               authentication.Make(),
-		marshaller:         &protocol.Marshaller{},
-		log:                logging.New(),
-		webRtc:             webrtc.MakeWebRtc(),
-		agent:              worldCommAgent{agent: agent},
-		coordinator:        makeCoordinator(coordinatorUrl),
-		Peers:              make(map[string]*peer),
-		peersIndex:         make(PeersIndex),
-		subscriptions:      make(map[string]bool),
-		stop:               make(chan bool),
-		unregisterQueue:    make(chan string, 255),
-		aliasChannel:       make(chan string),
-		topicQueue:         make(chan *topicChange, 255),
-		connectQueue:       make(chan string, 255),
-		messagesQueue:      make(chan *peerMessage, 255),
-		webRtcControlQueue: make(chan *protocol.WebRtcMessage, 255),
-		Reporter:           &defaultReporter{},
-		ReportPeriod:       30 * time.Second,
+		authMethod:            authMethod,
+		Auth:                  authentication.Make(),
+		marshaller:            &protocol.Marshaller{},
+		log:                   logging.New(),
+		webRtc:                webrtc.MakeWebRtc(),
+		agent:                 worldCommAgent{agent: agent},
+		coordinator:           makeCoordinator(coordinatorUrl),
+		zipper:                &utils.GzipCompression{},
+		Peers:                 make([]*peer, 0),
+		subscriptions:         make(topicSubscriptions),
+		stop:                  make(chan bool),
+		unregisterQueue:       make(chan *peer, 255),
+		serverRegisteredQueue: make(chan *peer, 255),
+		aliasChannel:          make(chan string),
+		topicQueue:            make(chan topicChange, 255),
+		connectQueue:          make(chan string, 255),
+		messagesQueue:         make(chan *peerMessage, 255),
+		webRtcControlQueue:    make(chan *protocol.WebRtcMessage, 255),
+		Reporter:              &defaultReporter{},
+		ReportPeriod:          30 * time.Second,
 	}
 }
 
@@ -173,11 +279,11 @@ func (p *peer) Close() {
 	}
 }
 
-func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, bytes []byte, topicMessage *protocol.TopicMessage) {
+func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, rawMsg []byte, topicMessage *protocol.TopicMessage) {
 	log := state.log
 	marshaller := state.marshaller
 
-	if err := marshaller.Unmarshal(bytes, topicMessage); err != nil {
+	if err := marshaller.Unmarshal(rawMsg, topicMessage); err != nil {
 		log.WithError(err).Debug("decode topic message failure")
 		return
 	}
@@ -195,14 +301,14 @@ func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, byt
 			fromServer: true,
 			reliable:   reliable,
 			topic:      topicMessage.Topic,
-			from:       p.alias,
-			bytes:      bytes,
+			from:       p,
+			rawMsg:     rawMsg,
 		}
 
 		state.messagesQueue <- msg
 	} else {
 		topicMessage.FromAlias = p.alias
-		bytes, err := marshaller.Marshal(topicMessage)
+		rawMsg, err := marshaller.Marshal(topicMessage)
 		if err != nil {
 			log.WithError(err).Error("encode topic message failure")
 			return
@@ -212,8 +318,8 @@ func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, byt
 			fromServer: false,
 			reliable:   reliable,
 			topic:      topicMessage.Topic,
-			from:       p.alias,
-			bytes:      bytes,
+			from:       p,
+			rawMsg:     rawMsg,
 		}
 
 		state.messagesQueue <- msg
@@ -225,7 +331,6 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 	auth := state.Auth
 	log := state.log
 	header := &protocol.WorldCommMessage{}
-	changeTopicMessage := &protocol.ChangeTopicMessage{}
 	topicMessage := &protocol.TopicMessage{}
 
 	buffer := make([]byte, maxWorldCommMessageSize)
@@ -242,7 +347,7 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 			}).Info("exit peer.readReliablePump(), datachannel closed")
 
 			p.Close()
-			state.unregisterQueue <- p.alias
+			state.unregisterQueue <- p
 			return
 		}
 
@@ -251,8 +356,8 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 		}
 
 		state.agent.RecordReceivedReliableFromPeerSize(n)
-		bytes := buffer[:n]
-		if err := marshaller.Unmarshal(bytes, header); err != nil {
+		rawMsg := buffer[:n]
+		if err := marshaller.Unmarshal(rawMsg, header); err != nil {
 			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
 			continue
 		}
@@ -272,7 +377,7 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 		switch msgType {
 		case protocol.MessageType_AUTH:
 			authMessage := &protocol.AuthMessage{}
-			if err := marshaller.Unmarshal(bytes, authMessage); err != nil {
+			if err := marshaller.Unmarshal(rawMsg, authMessage); err != nil {
 				log.WithField("peer", p.alias).WithError(err).Debug("decode auth message failure")
 				continue
 			}
@@ -308,71 +413,38 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 							continue
 						}
 
-						bytes, err := state.marshaller.Marshal(authMessage)
+						rawMsg, err := state.marshaller.Marshal(authMessage)
 						if err != nil {
 							log.WithError(err).Error("cannot encode auth message")
 							return
 						}
 
-						p.sendReliable <- bytes
+						p.sendReliable <- rawMsg
 					}
 
-					state.subscriptionsMux.RLock()
-					for topic := range state.subscriptions {
-						changeTopicMessage.Type = protocol.MessageType_ADD_TOPIC
-						changeTopicMessage.Topic = topic
-
-						bytes, err := state.marshaller.Marshal(changeTopicMessage)
-						if err != nil {
-							log.WithError(err).Error("encode add topic message failure")
-							p.Close()
-							break
-						}
-
-						p.sendReliable <- bytes
-					}
-					state.subscriptionsMux.RUnlock()
+					state.serverRegisteredQueue <- p
 				}
 			} else {
 				log.WithField("peer", p.alias).Debug("closing connection: not authorized")
 				p.Close()
 				break
 			}
-		case protocol.MessageType_ADD_TOPIC:
-			if err := marshaller.Unmarshal(bytes, changeTopicMessage); err != nil {
+		case protocol.MessageType_TOPIC_SUBSCRIPTION:
+			topicSubscriptionMessage := &protocol.TopicSubscriptionMessage{}
+			if err := marshaller.Unmarshal(rawMsg, topicSubscriptionMessage); err != nil {
 				log.WithField("peer", p.alias).WithError(err).Debug("decode add topic message failure")
 				continue
 			}
 
-			topic := changeTopicMessage.Topic
-
-			if logAddTopic {
-				log.WithFields(logging.Fields{
-					"id":    state.GetAlias(),
-					"peer":  p.alias,
-					"topic": topic,
-				}).Debug("add topic message")
+			state.topicQueue <- topicChange{
+				peer:      p,
+				format:    topicSubscriptionMessage.Format,
+				rawTopics: topicSubscriptionMessage.Topics,
 			}
-
-			state.topicQueue <- &topicChange{op: AddTopic, alias: p.alias, topic: topic}
-		case protocol.MessageType_REMOVE_TOPIC:
-			if err := marshaller.Unmarshal(bytes, changeTopicMessage); err != nil {
-				log.WithError(err).Debug("decode remove topic message failure")
-				continue
-			}
-			topic := changeTopicMessage.Topic
-			if logRemoveTopic {
-				log.WithFields(logging.Fields{
-					"id":    state.GetAlias(),
-					"peer":  p.alias,
-					"topic": topic,
-				}).Debug("remove topic message")
-			}
-			state.topicQueue <- &topicChange{op: RemoveTopic, alias: p.alias, topic: topic}
 		case protocol.MessageType_TOPIC:
-			readPeerMessage(state, p, true, bytes, topicMessage)
+			readPeerMessage(state, p, true, rawMsg, topicMessage)
 		case protocol.MessageType_PING:
-			p.sendUnreliable <- bytes
+			p.sendUnreliable <- rawMsg
 		default:
 			log.WithField("type", msgType).Debug("unhandled reliable message from peer")
 		}
@@ -383,6 +455,7 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 	marshaller := state.marshaller
 	log := state.log
+
 	header := &protocol.WorldCommMessage{}
 	topicMessage := &protocol.TopicMessage{}
 
@@ -398,7 +471,6 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 			}).Info("exit peer.readUnreliablePump(), datachannel closed")
 
 			p.Close()
-			state.unregisterQueue <- p.alias
 			return
 		}
 
@@ -407,8 +479,8 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 		}
 
 		state.agent.RecordReceivedUnreliableFromPeerSize(n)
-		bytes := buffer[:n]
-		if err := marshaller.Unmarshal(bytes, header); err != nil {
+		rawMsg := buffer[:n]
+		if err := marshaller.Unmarshal(rawMsg, header); err != nil {
 			log.WithField("peer", p.alias).WithError(err).Debug("decode header message failure")
 			continue
 		}
@@ -426,9 +498,9 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 
 		switch msgType {
 		case protocol.MessageType_TOPIC:
-			readPeerMessage(state, p, false, bytes, topicMessage)
+			readPeerMessage(state, p, false, rawMsg, topicMessage)
 		case protocol.MessageType_PING:
-			p.sendUnreliable <- bytes
+			p.sendUnreliable <- rawMsg
 		default:
 			log.WithField("type", msgType).Debug("unhandled unreliable message from peer")
 		}
@@ -442,7 +514,7 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 	log := state.log
 	for {
 		select {
-		case bytes, ok := <-p.sendReliable:
+		case rawMsg, ok := <-p.sendReliable:
 			if !ok {
 				log.WithFields(logging.Fields{
 					"id":   state.GetAlias(),
@@ -451,22 +523,22 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 				return
 			}
 
-			if err := p.conn.WriteReliable(bytes); err != nil {
+			if err := p.conn.WriteReliable(rawMsg); err != nil {
 				log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 				return
 			}
 
-			state.agent.RecordSentReliableToPeerSize(len(bytes))
+			state.agent.RecordSentReliableToPeerSize(len(rawMsg))
 			n := len(p.sendReliable)
 			for i := 0; i < n; i++ {
-				bytes = <-p.sendReliable
-				if err := p.conn.WriteReliable(bytes); err != nil {
+				rawMsg = <-p.sendReliable
+				if err := p.conn.WriteReliable(rawMsg); err != nil {
 					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 					return
 				}
-				state.agent.RecordSentReliableToPeerSize(len(bytes))
+				state.agent.RecordSentReliableToPeerSize(len(rawMsg))
 			}
-		case bytes, ok := <-p.sendUnreliable:
+		case rawMsg, ok := <-p.sendUnreliable:
 			if !ok {
 				log.WithFields(logging.Fields{
 					"id":   state.GetAlias(),
@@ -475,20 +547,20 @@ func (p *peer) writePump(state *WorldCommunicationState) {
 				return
 			}
 
-			if err := p.conn.WriteUnreliable(bytes); err != nil {
+			if err := p.conn.WriteUnreliable(rawMsg); err != nil {
 				log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 				return
 			}
 
-			state.agent.RecordSentUnreliableToPeerSize(len(bytes))
+			state.agent.RecordSentUnreliableToPeerSize(len(rawMsg))
 			n := len(p.sendUnreliable)
 			for i := 0; i < n; i++ {
-				bytes = <-p.sendUnreliable
-				if err := p.conn.WriteUnreliable(bytes); err != nil {
+				rawMsg = <-p.sendUnreliable
+				if err := p.conn.WriteUnreliable(rawMsg); err != nil {
 					log.WithField("peer", p.alias).WithError(err).Error("error writing message")
 					return
 				}
-				state.agent.RecordSentUnreliableToPeerSize(len(bytes))
+				state.agent.RecordSentUnreliableToPeerSize(len(rawMsg))
 			}
 		}
 	}
@@ -535,18 +607,18 @@ func Process(state *WorldCommunicationState) {
 				processConnect(state, alias)
 			}
 		case change := <-state.topicQueue:
-			processTopicChange(state, change)
+			ProcessTopicChange(state, change)
 			n := len(state.topicQueue)
 			for i := 0; i < n; i++ {
 				change := <-state.topicQueue
-				processTopicChange(state, change)
+				ProcessTopicChange(state, change)
 			}
-		case alias := <-state.unregisterQueue:
-			processUnregister(state, alias)
+		case p := <-state.unregisterQueue:
+			processUnregister(state, p)
 			n := len(state.unregisterQueue)
 			for i := 0; i < n; i++ {
-				alias = <-state.unregisterQueue
-				processUnregister(state, alias)
+				p = <-state.unregisterQueue
+				processUnregister(state, p)
 			}
 		case webRtcMessage := <-state.webRtcControlQueue:
 			processWebRtcControlMessage(state, webRtcMessage)
@@ -561,6 +633,42 @@ func Process(state *WorldCommunicationState) {
 			for i := 0; i < n; i++ {
 				msg = <-state.messagesQueue
 				processPeerMessage(state, msg)
+			}
+		case p := <-state.serverRegisteredQueue:
+			buffer := bytes.Buffer{}
+			i := 0
+			last := len(state.subscriptions) - 1
+			for topic := range state.subscriptions {
+				buffer.WriteString(topic)
+				if i != last {
+					buffer.WriteString(" ")
+				}
+				i += 1
+			}
+
+			zipped, err := state.zipper.Zip(buffer.Bytes())
+			if err != nil {
+				log.WithError(err).Error("zip failure")
+				break
+			}
+			topicSubscriptionMessage := &protocol.TopicSubscriptionMessage{
+				Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+				Format: protocol.Format_ZIP,
+			}
+			topicSubscriptionMessage.Topics = zipped
+
+			rawMsg, err := state.marshaller.Marshal(topicSubscriptionMessage)
+			if err != nil {
+				log.WithError(err).Error("encode add topic message failure")
+				break
+			}
+
+			p.sendReliable <- rawMsg
+
+			n := len(state.serverRegisteredQueue)
+			for i := 0; i < n; i++ {
+				p = <-state.serverRegisteredQueue
+				p.sendReliable <- rawMsg
 			}
 		case <-ticker.C:
 			state.Reporter.Report(state)
@@ -597,10 +705,10 @@ func initPeer(state *WorldCommunicationState, alias string) (*peer, error) {
 		sendUnreliable: make(chan []byte, 256),
 		alias:          alias,
 		conn:           conn,
-		Topics:         make(map[string]bool),
+		Topics:         make(map[string]struct{}),
 	}
 
-	state.Peers[alias] = p
+	state.Peers = append(state.Peers, p)
 
 	conn.OnReliableChannelOpen(func() {
 		go p.writePump(state)
@@ -614,44 +722,32 @@ func initPeer(state *WorldCommunicationState, alias string) (*peer, error) {
 	return p, nil
 }
 
-func processUnregister(state *WorldCommunicationState, alias string) {
+func processUnregister(state *WorldCommunicationState, p *peer) {
 	log := state.log
-	p := state.Peers[alias]
-	if p != nil {
-		log.WithField("peer", alias).Debug("unregister peer")
-		delete(state.Peers, alias)
 
-		close(p.sendReliable)
-		close(p.sendUnreliable)
+	alias := p.alias
+	log.WithField("peer", alias).Debug("unregister peer")
+
+	state.Peers = removePeer(state.Peers, p)
+
+	close(p.sendReliable)
+	close(p.sendUnreliable)
+
+	if p.isServer {
+		for topic := range p.Topics {
+			state.subscriptions.RemoveServerSubscription(topic, p)
+		}
+	} else {
+		topicsChanged := false
 
 		for topic := range p.Topics {
-			peers := state.peersIndex[topic]
-			if peers != nil {
-				delete(peers, alias)
+			if state.subscriptions.RemoveClientSubscription(topic, p) {
+				topicsChanged = true
 			}
+		}
 
-			// NOTE if a client is unsubscribe for a topic,
-			// check if there is at least one other client subscription,
-			// if not, cancel it.
-			if !p.isServer && state.IsTopicSubscribed(topic) {
-				shouldRemoveTopic := true
-
-				for alias := range peers {
-					p := state.Peers[alias]
-
-					if !p.isServer {
-						shouldRemoveTopic = false
-						break
-					}
-				}
-
-				if shouldRemoveTopic {
-					broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
-					state.subscriptionsMux.Lock()
-					delete(state.subscriptions, topic)
-					state.subscriptionsMux.Unlock()
-				}
-			}
+		if topicsChanged {
+			broadcastTopicChange(state)
 		}
 	}
 }
@@ -659,7 +755,10 @@ func processUnregister(state *WorldCommunicationState, alias string) {
 func processConnect(state *WorldCommunicationState, alias string) error {
 	log := state.log
 
-	processUnregister(state, alias)
+	oldP := findPeer(state.Peers, alias)
+	if oldP != nil && !oldP.IsClosed() {
+		processUnregister(state, oldP)
+	}
 
 	p, err := initPeer(state, alias)
 	if err != nil {
@@ -680,66 +779,80 @@ func processConnect(state *WorldCommunicationState, alias string) error {
 	return nil
 }
 
-func processTopicChange(state *WorldCommunicationState, change *topicChange) {
-	alias := change.alias
-	topic := change.topic
+func ProcessTopicChange(state *WorldCommunicationState, change topicChange) error {
+	log := state.log
+	p := change.peer
 
-	p := state.Peers[alias]
+	topicsChanged := false
 
-	if p == nil {
-		return
-	}
+	rawTopics := change.rawTopics
+	if change.format == protocol.Format_ZIP {
+		unzipedTopics, err := state.zipper.Unzip(rawTopics)
 
-	peers := state.peersIndex[topic]
-
-	if peers == nil {
-		peers = make(map[string]bool)
-		state.peersIndex[topic] = peers
-	}
-
-	if change.op == AddTopic {
-		peers[alias] = true
-		p.Topics[topic] = true
-		if !p.isServer && !state.IsTopicSubscribed(topic) {
-			broadcastTopicChange(state, protocol.MessageType_ADD_TOPIC, topic)
-
-			state.subscriptionsMux.Lock()
-			state.subscriptions[topic] = true
-			state.subscriptionsMux.Unlock()
+		if err != nil {
+			log.WithError(err).Error("unzip failure")
+			return err
 		}
-	} else {
-		delete(peers, alias)
-		delete(p.Topics, topic)
 
-		// NOTE if a client is unsubscribe for a topic, check if there is at least one other client subscription,
-		// if not, cancel it.
-		if !p.isServer && state.IsTopicSubscribed(topic) {
-			shouldRemoveTopic := true
+		rawTopics = unzipedTopics
+	}
 
-			for alias := range peers {
-				p := state.Peers[alias]
+	newTopics := make([]string, len(rawTopics))
 
-				if !p.isServer {
-					shouldRemoveTopic = false
-					break
+	if len(rawTopics) > 0 {
+		// NOTE: check if topics were added
+		for i, rawTopic := range bytes.Split(rawTopics, []byte(" ")) {
+			topic := string(rawTopic)
+
+			newTopics[i] = topic
+
+			if _, ok := p.Topics[topic]; ok {
+				continue
+			}
+
+			p.Topics[topic] = struct{}{}
+
+			if p.isServer {
+				state.subscriptions.AddServerSubscription(topic, p)
+			} else {
+				if state.subscriptions.AddClientSubscription(topic, p) {
+					topicsChanged = true
 				}
 			}
+		}
+	}
 
-			if shouldRemoveTopic {
-				broadcastTopicChange(state, protocol.MessageType_REMOVE_TOPIC, topic)
-				state.subscriptionsMux.Lock()
-				delete(state.subscriptions, topic)
-				state.subscriptionsMux.Unlock()
+	sort.Strings(newTopics)
+
+	// NOTE: check if topics were deleted
+	for topic := range p.Topics {
+		if sort.SearchStrings(newTopics, topic) < len(newTopics) {
+			continue
+		}
+
+		delete(p.Topics, topic)
+
+		if p.isServer {
+			state.subscriptions.RemoveServerSubscription(topic, p)
+		} else {
+			if state.subscriptions.RemoveClientSubscription(topic, p) {
+				topicsChanged = true
 			}
 		}
 	}
+
+	if topicsChanged {
+		return broadcastTopicChange(state)
+	}
+
+	return nil
 }
 
 func processWebRtcControlMessage(state *WorldCommunicationState, webRtcMessage *protocol.WebRtcMessage) error {
 	log := state.log
 
 	alias := webRtcMessage.FromAlias
-	p := state.Peers[alias]
+	p := findPeer(state.Peers, alias)
 	if p == nil {
 		np, err := initPeer(state, alias)
 		if err != nil {
@@ -791,42 +904,69 @@ func processWebRtcControlMessage(state *WorldCommunicationState, webRtcMessage *
 }
 
 func processPeerMessage(state *WorldCommunicationState, msg *peerMessage) {
-	peers := state.peersIndex[msg.topic]
-	if peers == nil {
+	topic := msg.topic
+	fromServer := msg.fromServer
+	reliable := msg.reliable
+
+	subscription, ok := state.subscriptions[topic]
+
+	if !ok {
 		return
 	}
 
-	for alias := range peers {
-		if alias != msg.from {
-			p := state.Peers[alias]
+	for _, p := range subscription.clients {
+		if p == msg.from || p.IsClosed() {
+			continue
+		}
+		if reliable {
+			p.sendReliable <- msg.rawMsg
+		} else {
+			p.sendUnreliable <- msg.rawMsg
+		}
+	}
 
-			if p == nil || p.IsClosed() {
+	if !fromServer {
+		for _, p := range subscription.servers {
+			if p.IsClosed() {
 				continue
 			}
-
-			if msg.fromServer && p.isServer {
-				continue
-			}
-
-			if msg.reliable {
-				p.sendReliable <- msg.bytes
+			if reliable {
+				p.sendReliable <- msg.rawMsg
 			} else {
-				p.sendUnreliable <- msg.bytes
+				p.sendUnreliable <- msg.rawMsg
 			}
 		}
 	}
 }
 
-func broadcastTopicChange(state *WorldCommunicationState, msgType protocol.MessageType, topic string) error {
+func broadcastTopicChange(state *WorldCommunicationState) error {
 	log := state.log
-	changeTopicMessage := &protocol.ChangeTopicMessage{
-		Type:  msgType,
-		Topic: topic,
+
+	buffer := bytes.Buffer{}
+	i := 0
+	last := len(state.subscriptions) - 1
+	for topic := range state.subscriptions {
+		buffer.WriteString(topic)
+		if i != last {
+			buffer.WriteString(" ")
+		}
+		i += 1
 	}
 
-	bytes, err := state.marshaller.Marshal(changeTopicMessage)
+	encodedTopics, err := state.zipper.Zip(buffer.Bytes())
 	if err != nil {
-		log.WithError(err).Error("encode change topic message failure")
+		return err
+	}
+
+	message := &protocol.TopicSubscriptionMessage{
+		Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+		Format: protocol.Format_ZIP,
+		Topics: encodedTopics,
+	}
+
+	rawMsg, err := state.marshaller.Marshal(message)
+	if err != nil {
+		log.WithError(err).Error("encode topic subscription message failure")
 		return err
 	}
 
@@ -836,7 +976,7 @@ func broadcastTopicChange(state *WorldCommunicationState, msgType protocol.Messa
 				"id":   state.GetAlias(),
 				"peer": p.alias,
 			}).Debug("send topic change (to server)")
-			p.sendReliable <- bytes
+			p.sendReliable <- rawMsg
 		}
 	}
 

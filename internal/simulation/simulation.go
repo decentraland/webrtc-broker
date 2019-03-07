@@ -18,7 +18,7 @@ import (
 var AVATARS []string = []string{"fox", "round robot", "square robot"}
 
 const (
-	PARCEL_SIZE = 10
+	PARCEL_SIZE = 16
 )
 
 func getRandomAvatar() string {
@@ -74,38 +74,28 @@ func updateLocationTopics(client *Client, p V3) {
 	maxZ := utils.Min(150, parcelZ+radius)
 
 	newTopics := make(map[string]bool)
+	topicsChanged := false
 
 	for x := minX; x < maxX; x += 1 {
 		for z := minZ; z < maxZ; z += 1 {
 			positionTopic := fmt.Sprintf("position:%d:%d", x, z)
-			newTopics[positionTopic] = true
-			if client.topics[positionTopic] {
-				delete(client.topics, positionTopic)
-			} else {
-				if err := client.sendAddTopicMessage(positionTopic); err != nil {
-					log.Fatal(err)
-				}
-			}
-
 			profileTopic := fmt.Sprintf("profile:%d:%d", x, z)
+			chatTopic := fmt.Sprintf("chat:%d:%d", x, z)
+
+			newTopics[positionTopic] = true
 			newTopics[profileTopic] = true
-			if client.topics[profileTopic] {
-				delete(client.topics, profileTopic)
-			} else {
-				if err := client.sendAddTopicMessage(profileTopic); err != nil {
-					log.Fatal(err)
-				}
+			newTopics[chatTopic] = true
+
+			if !client.topics[positionTopic] || !client.topics[profileTopic] {
+				topicsChanged = true
 			}
 		}
 	}
 
-	for topic := range client.topics {
-		if err := client.sendRemoveTopicMessage(topic); err != nil {
-			log.Fatal(err)
-		}
+	if topicsChanged {
+		client.topics = newTopics
+		client.sendTopicSubscriptionMessage(newTopics)
 	}
-
-	client.topics = newTopics
 }
 
 func StartBot(coordinatorUrl string, options BotOptions) {
@@ -164,9 +154,11 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 	lastPositionMsg := time.Now()
 
 	profileTicker := time.NewTicker(1 * time.Second)
-	positionTicker := time.NewTicker(100 * time.Millisecond)
+	positionTicker := time.NewTicker(500 * time.Millisecond)
+	chatTicker := time.NewTicker(10 * time.Second)
 	defer profileTicker.Stop()
 	defer positionTicker.Stop()
+	defer chatTicker.Stop()
 
 	for {
 		select {
@@ -184,6 +176,21 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 			})
 			if err != nil {
 				log.Fatal("encode profile failed", err)
+			}
+			client.sendReliable <- bytes
+		case <-chatTicker.C:
+			parcelX := int(p.X / PARCEL_SIZE)
+			parcelZ := int(p.Z / PARCEL_SIZE)
+			topic := fmt.Sprintf("chat:%d:%d", parcelX, parcelZ)
+
+			ms := utils.NowMs()
+			bytes, err := encodeTopicMessage(topic, &protocol.ChatData{
+				Time:      ms,
+				MessageId: ksuid.New().String(),
+				Text:      "hi",
+			})
+			if err != nil {
+				log.Fatal("encode chat failed", err)
 			}
 			client.sendReliable <- bytes
 		case <-positionTicker.C:

@@ -208,12 +208,8 @@ func (tc *TestClient) start(t *testing.T) WorldData {
 	return worldData
 }
 
-func (tc *TestClient) sendAddTopicMessage(t *testing.T, topic string) {
-	require.NoError(t, tc.client.sendAddTopicMessage(topic))
-}
-
-func (tc *TestClient) sendRemoveTopicMessage(t *testing.T, topic string) {
-	require.NoError(t, tc.client.sendRemoveTopicMessage(topic))
+func (tc *TestClient) sendTopicSubscriptionMessage(t *testing.T, topics map[string]bool) {
+	require.NoError(t, tc.client.sendTopicSubscriptionMessage(topics))
 }
 
 func (tc *TestClient) encodeTopicMessage(t *testing.T, topic string) []byte {
@@ -296,8 +292,8 @@ func TestE2E(t *testing.T) {
 	require.True(t, comm2Snapshot.Peers[c2.alias].IsAuthenticated)
 
 	printTitle("Both clients are subscribing to 'profile' topic")
-	c1.sendAddTopicMessage(t, "profile")
-	c2.sendAddTopicMessage(t, "profile")
+	c1.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
+	c2.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
 
 	// NOTE: wait until subscriptions are ready
 	time.Sleep(sleepPeriod)
@@ -348,7 +344,7 @@ func TestE2E(t *testing.T) {
 	require.Equal(t, c1.alias, topicMessage.GetFromAlias())
 
 	printTitle("Remove topic")
-	c2.sendRemoveTopicMessage(t, "profile")
+	c2.sendTopicSubscriptionMessage(t, map[string]bool{})
 
 	time.Sleep(sleepPeriod)
 	comm2Snapshot = comm2Reporter.GetStateSnapshot()
@@ -368,7 +364,7 @@ func TestE2E(t *testing.T) {
 	require.True(t, comm1Snapshot.Peers[c2.alias].IsAuthenticated)
 
 	printTitle("Subscribe to topics again")
-	c2.sendAddTopicMessage(t, "profile")
+	c2.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
 	time.Sleep(longSleepPeriod)
 	comm1Snapshot = comm1Reporter.GetStateSnapshot()
 	require.True(t, comm1Snapshot.Peers[c1.alias].Topics["profile"])

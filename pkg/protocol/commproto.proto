@@ -9,16 +9,21 @@ enum MessageType {
   WEBRTC_ANSWER = 5;
   WEBRTC_ICE_CANDIDATE = 6;
   PING = 7;
-  ADD_TOPIC = 8;
-  REMOVE_TOPIC = 9;
-  TOPIC = 10;
-  AUTH = 11;
+  TOPIC_SUBSCRIPTION = 8;
+  TOPIC = 9;
+  AUTH = 10;
 }
 
 enum Role {
   UNKNOWN_ROLE = 0;
   CLIENT = 1;
   COMMUNICATION_SERVER = 2;
+}
+
+enum Format {
+  UNKNOWN_FORMAT = 0;
+  PLAIN = 1;
+  ZIP = 2;
 }
 
 // NOTE: coordination messsages
@@ -57,9 +62,11 @@ message PingMessage {
     double time = 2;
 }
 
-message ChangeTopicMessage {
+// NOTE: topics is a space separated string in the format specified by Format
+message TopicSubscriptionMessage {
     MessageType type = 1;
-    string topic = 2;
+    Format format = 2;
+    bytes topics = 3;
 }
 
 message TopicMessage {

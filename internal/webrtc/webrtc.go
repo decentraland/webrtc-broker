@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/pions/datachannel"
-	_webrtc "github.com/pions/webrtc"
+	pions "github.com/pions/webrtc"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,14 +26,14 @@ type IWebRtcConnection interface {
 type webRtcConnection struct {
 	onUnreliableChannelOpen func()
 	onReliableChannelOpen   func()
-	conn                    *_webrtc.PeerConnection
+	conn                    *pions.PeerConnection
 	reliableDataChannel     *datachannel.DataChannel
 	unreliableDataChannel   *datachannel.DataChannel
 	createdAt               time.Time
 }
 
-var config = _webrtc.Configuration{
-	ICEServers: []_webrtc.ICEServer{
+var config = pions.Configuration{
+	ICEServers: []pions.ICEServer{
 		{
 			URLs: []string{"stun:stun.l.google.com:19302"},
 		},
@@ -42,7 +42,7 @@ var config = _webrtc.Configuration{
 
 func openUnreliableDataChannel(conn *webRtcConnection) error {
 	var maxRetransmits uint16 = 0
-	options := &_webrtc.DataChannelInit{MaxRetransmits: &maxRetransmits}
+	options := &pions.DataChannelInit{MaxRetransmits: &maxRetransmits}
 	c, err := conn.conn.CreateDataChannel("unreliable", options)
 
 	if err != nil {
@@ -116,8 +116,8 @@ func (conn *webRtcConnection) CreateOffer() (string, error) {
 }
 
 func (conn *webRtcConnection) OnAnswer(sdp string) error {
-	answer := _webrtc.SessionDescription{
-		Type: _webrtc.SDPTypeAnswer,
+	answer := pions.SessionDescription{
+		Type: pions.SDPTypeAnswer,
 		SDP:  sdp,
 	}
 
@@ -130,8 +130,8 @@ func (conn *webRtcConnection) OnAnswer(sdp string) error {
 }
 
 func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
-	offer := _webrtc.SessionDescription{
-		Type: _webrtc.SDPTypeOffer,
+	offer := pions.SessionDescription{
+		Type: pions.SDPTypeOffer,
 		SDP:  sdp,
 	}
 
@@ -156,7 +156,7 @@ func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
 }
 
 func (conn *webRtcConnection) OnIceCandidate(sdp string) error {
-	if err := conn.conn.AddICECandidate(_webrtc.ICECandidateInit{Candidate: sdp}); err != nil {
+	if err := conn.conn.AddICECandidate(pions.ICECandidateInit{Candidate: sdp}); err != nil {
 		log.WithError(err).Error("error adding ice candidate")
 		return err
 	}
@@ -213,14 +213,14 @@ type IWebRtc interface {
 }
 
 type WebRtc struct {
-	api *_webrtc.API
+	api *pions.API
 }
 
 func MakeWebRtc() *WebRtc {
-	s := _webrtc.SettingEngine{}
+	s := pions.SettingEngine{}
 	s.DetachDataChannels()
 
-	api := _webrtc.NewAPI(_webrtc.WithSettingEngine(s))
+	api := pions.NewAPI(pions.WithSettingEngine(s))
 	return &WebRtc{api: api}
 }
 
@@ -241,9 +241,9 @@ func (w *WebRtc) NewConnection() (IWebRtcConnection, error) {
 		return nil, err
 	}
 
-	conn.OnICEConnectionStateChange(func(connectionState _webrtc.ICEConnectionState) {
+	conn.OnICEConnectionStateChange(func(connectionState pions.ICEConnectionState) {
 		log.WithField("iceConnectionState", connectionState.String()).Debug("ICE Connection State has changed:")
-		if connectionState == _webrtc.ICEConnectionStateDisconnected {
+		if connectionState == pions.ICEConnectionStateDisconnected {
 			log.Debug("Connection state is disconnected, close connection")
 			conn.Close()
 		}

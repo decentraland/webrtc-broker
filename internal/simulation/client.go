@@ -1,9 +1,11 @@
 package simulation
 
 import (
+	"bytes"
 	"log"
 	"time"
 
+	"github.com/decentraland/communications-server-go/internal/utils"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
@@ -46,15 +48,34 @@ type Client struct {
 	topics                map[string]bool
 }
 
-func encodeChangeTopicMessage(msgType protocol.MessageType, topic string) ([]byte, error) {
-	changeTopicMessage := &protocol.ChangeTopicMessage{
-		Type:  msgType,
-		Topic: topic,
+func encodeTopicSubscriptionMessage(topics map[string]bool) ([]byte, error) {
+	buffer := bytes.Buffer{}
+
+	i := 0
+	last := len(topics) - 1
+	for topic := range topics {
+		buffer.WriteString(topic)
+		if i != last {
+			buffer.WriteString(" ")
+		}
+		i += 1
 	}
 
-	bytes, err := proto.Marshal(changeTopicMessage)
+	gzip := utils.GzipCompression{}
+	encodedTopics, err := gzip.Zip(buffer.Bytes())
 	if err != nil {
-		return bytes, err
+		return nil, err
+	}
+
+	message := &protocol.TopicSubscriptionMessage{
+		Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+		Format: protocol.Format_ZIP,
+		Topics: encodedTopics,
+	}
+
+	bytes, err := proto.Marshal(message)
+	if err != nil {
+		return nil, err
 	}
 
 	return bytes, nil
@@ -106,7 +127,7 @@ func MakeClient(id string, coordinatorUrl string) *Client {
 		stopUnreliableQueue:   make(chan bool),
 		worldData:             make(chan WorldData),
 		topics:                make(map[string]bool),
-		coordinatorWriteQueue: make(chan []byte),
+		coordinatorWriteQueue: make(chan []byte, 256),
 	}
 
 	go c.CoordinatorWritePump()
@@ -312,7 +333,7 @@ func (client *Client) connect(serverAlias string) error {
 					n := len(messagesQueue)
 
 					for i := 0; i < n; i++ {
-						bytes := <-messagesQueue
+						bytes = <-messagesQueue
 						_, err := c.Write(bytes)
 						if err != nil {
 							log.Println("error writting", err)
@@ -348,25 +369,13 @@ func (client *Client) connect(serverAlias string) error {
 	return nil
 }
 
-func (client *Client) sendAddTopicMessage(topic string) error {
-	bytes, err := encodeChangeTopicMessage(protocol.MessageType_ADD_TOPIC, topic)
+func (client *Client) sendTopicSubscriptionMessage(topics map[string]bool) error {
+	bytes, err := encodeTopicSubscriptionMessage(topics)
 
 	if err != nil {
 		return err
 	}
 
 	client.sendReliable <- bytes
-	return nil
-}
-
-func (client *Client) sendRemoveTopicMessage(topic string) error {
-	bytes, err := encodeChangeTopicMessage(protocol.MessageType_REMOVE_TOPIC, topic)
-
-	if err != nil {
-		return err
-	}
-
-	client.sendReliable <- bytes
-
 	return nil
 }

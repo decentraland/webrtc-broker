@@ -21,7 +21,7 @@ func main() {
 	reportCaller := flag.Bool("reportCaller", false, "")
 	logLevel := flag.String("logLevel", "debug", "")
 	authMethod := flag.String("authMethod", "secret", "noop")
-	profilerEnabled := flag.Bool("profilerEnabled", false, "")
+	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
 	noopAuthEnabled := flag.Bool("noopAuthEnabled", false, "")
 	flag.Parse()
 
@@ -39,10 +39,11 @@ func main() {
 		log.Fatal("Cannot initialize new relic: ", err)
 	}
 
-	if *profilerEnabled {
+	if *profilerPort != -1 {
 		go func() {
-			log.Info("Starting profiler at localhost:6060")
-			log.Debug(http.ListenAndServe("localhost:6060", nil))
+			addr := fmt.Sprintf("localhost:%d", *profilerPort)
+			log.Info("Starting profiler at ", addr)
+			log.Debug(http.ListenAndServe(addr, nil))
 		}()
 	}
 
