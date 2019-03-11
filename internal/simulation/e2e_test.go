@@ -132,7 +132,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 	case <-r.RequestData:
 		peers := make(map[string]peerSnapshot)
 
-		for alias, p := range state.Peers {
+		for _ , p := range state.Peers {
 			s := peerSnapshot{
 				IsAuthenticated: p.IsAuthenticated(),
 				Topics:          make(map[string]bool),
@@ -142,7 +142,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 				s.Topics[topic] = true
 			}
 
-			peers[alias] = s
+			peers[p.Alias] = s
 		}
 
 		snapshot := worldCommSnapshot{

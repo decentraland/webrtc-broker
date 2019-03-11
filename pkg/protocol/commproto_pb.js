@@ -2611,7 +2611,7 @@ proto.Role = {
 proto.Format = {
   UNKNOWN_FORMAT: 0,
   PLAIN: 1,
-  ZIP: 2
+  GZIP: 2
 };
 
 goog.object.extend(exports, proto);

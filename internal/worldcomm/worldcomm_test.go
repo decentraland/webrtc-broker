@@ -39,7 +39,7 @@ func makeTestState(t *testing.T) WorldCommunicationState {
 
 func makeClient(alias string, conn *MockWebRtcConnection) *peer {
 	return &peer{
-		alias:          alias,
+		Alias:          alias,
 		conn:           conn,
 		sendReliable:   make(chan []byte, 256),
 		sendUnreliable: make(chan []byte, 256),
@@ -452,7 +452,7 @@ func TestReadPeerPump(t *testing.T) {
 
 		require.Len(t, state.topicQueue, 1)
 		change := <-state.topicQueue
-		require.Equal(t, "peer1", change.peer.alias)
+		require.Equal(t, "peer1", change.peer.Alias)
 		require.Equal(t, change.rawTopics, msg.Topics)
 	})
 
@@ -723,7 +723,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		require.Equal(t, 1, i)
 		require.Len(t, state.coordinator.send, 1)
 		require.Len(t, state.Peers, 1)
-		require.Equal(t, state.Peers[0].alias, "peer1")
+		require.Equal(t, state.Peers[0].Alias, "peer1")
 	})
 
 	t.Run("webrtc offer", func(t *testing.T) {
@@ -747,13 +747,13 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p.alias,
+			FromAlias: p.Alias,
 		}
 
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p2.alias,
+			FromAlias: p2.Alias,
 		}
 
 		state.softStop = true
@@ -782,7 +782,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p.alias,
+			FromAlias: p.Alias,
 		}
 
 		state.softStop = true
@@ -810,7 +810,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ANSWER,
 			Sdp:       "sdp-answer",
-			FromAlias: p.alias,
+			FromAlias: p.Alias,
 		}
 
 		state.softStop = true
@@ -837,7 +837,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ICE_CANDIDATE,
 			Sdp:       "sdp-candidate",
-			FromAlias: p.alias,
+			FromAlias: p.Alias,
 		}
 
 		state.softStop = true
@@ -962,7 +962,7 @@ func TestProcessServerRegistered(t *testing.T) {
 		rawMsg := <-s1.sendReliable
 		require.NoError(t, proto.Unmarshal(rawMsg, message))
 		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
-		require.Equal(t, protocol.Format_ZIP, message.Format)
+		require.Equal(t, protocol.Format_GZIP, message.Format)
 		rawTopics, err := state.zipper.Unzip(message.Topics)
 		require.NoError(t, err)
 		require.Len(t, rawTopics, 0)
@@ -1000,7 +1000,7 @@ func TestProcessServerRegistered(t *testing.T) {
 		rawMsg := <-s1.sendReliable
 		require.NoError(t, proto.Unmarshal(rawMsg, message))
 		require.Equal(t, protocol.MessageType_TOPIC_SUBSCRIPTION, message.Type)
-		require.Equal(t, protocol.Format_ZIP, message.Format)
+		require.Equal(t, protocol.Format_GZIP, message.Format)
 		rawTopics, err := state.zipper.Unzip(message.Topics)
 		require.NoError(t, err)
 		topics := strings.Split(string(rawTopics), " ")

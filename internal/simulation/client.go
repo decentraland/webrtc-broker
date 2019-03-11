@@ -69,7 +69,7 @@ func encodeTopicSubscriptionMessage(topics map[string]bool) ([]byte, error) {
 
 	message := &protocol.TopicSubscriptionMessage{
 		Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
-		Format: protocol.Format_ZIP,
+		Format: protocol.Format_GZIP,
 		Topics: encodedTopics,
 	}
 
