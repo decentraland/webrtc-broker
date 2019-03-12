@@ -132,7 +132,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 	case <-r.RequestData:
 		peers := make(map[string]peerSnapshot)
 
-		for _ , p := range state.Peers {
+		for _, p := range state.Peers {
 			s := peerSnapshot{
 				IsAuthenticated: p.IsAuthenticated(),
 				Topics:          make(map[string]bool),

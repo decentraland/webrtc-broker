@@ -19,6 +19,8 @@ var AVATARS []string = []string{"fox", "round robot", "square robot"}
 
 const (
 	PARCEL_SIZE = 16
+	MAX_PARCEL  = 150
+	MIN_PARCEL  = -150
 )
 
 func getRandomAvatar() string {
@@ -65,22 +67,24 @@ type BotOptions struct {
 }
 
 func updateLocationTopics(client *Client, p V3) {
-	radius := 10
+	radius := 4
 	parcelX := int(p.X / PARCEL_SIZE)
 	parcelZ := int(p.Z / PARCEL_SIZE)
-	minX := utils.Max(-150, parcelX-radius)
-	maxX := utils.Min(150, parcelX+radius)
-	minZ := utils.Max(-150, parcelZ-radius)
-	maxZ := utils.Min(150, parcelZ+radius)
+
+	minX := ((utils.Max(MIN_PARCEL, parcelX-radius) + MAX_PARCEL) >> 2) << 2
+	maxX := ((utils.Min(MAX_PARCEL, parcelX+radius) + MAX_PARCEL) >> 2) << 2
+	minZ := ((utils.Max(MIN_PARCEL, parcelZ-radius) + MAX_PARCEL) >> 2) << 2
+	maxZ := ((utils.Min(MAX_PARCEL, parcelZ+radius) + MAX_PARCEL) >> 2) << 2
 
 	newTopics := make(map[string]bool)
 	topicsChanged := false
 
-	for x := minX; x < maxX; x += 1 {
-		for z := minZ; z < maxZ; z += 1 {
-			positionTopic := fmt.Sprintf("position:%d:%d", x, z)
-			profileTopic := fmt.Sprintf("profile:%d:%d", x, z)
-			chatTopic := fmt.Sprintf("chat:%d:%d", x, z)
+	for x := minX; x <= maxX; x += 4 {
+		for z := minZ; z <= maxZ; z += 4 {
+			hash := fmt.Sprintf("%d:%d", x>>2, z>>2)
+			positionTopic := fmt.Sprintf("position:%s", hash)
+			profileTopic := fmt.Sprintf("profile:%s", hash)
+			chatTopic := fmt.Sprintf("chat:%s", hash)
 
 			newTopics[positionTopic] = true
 			newTopics[profileTopic] = true
@@ -160,12 +164,17 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 	defer positionTicker.Stop()
 	defer chatTicker.Stop()
 
+	hashLocation := func() string {
+		parcelX := (int(p.X/PARCEL_SIZE) + MAX_PARCEL) >> 2
+		parcelZ := (int(p.Z/PARCEL_SIZE) + MAX_PARCEL) >> 2
+		hash := fmt.Sprintf("%d:%d", parcelX, parcelZ)
+		return hash
+	}
+
 	for {
 		select {
 		case <-profileTicker.C:
-			parcelX := int(p.X / PARCEL_SIZE)
-			parcelZ := int(p.Z / PARCEL_SIZE)
-			topic := fmt.Sprintf("profile:%d:%d", parcelX, parcelZ)
+			topic := fmt.Sprintf("profile:%s", hashLocation())
 
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.ProfileData{
@@ -179,9 +188,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 			}
 			client.sendReliable <- bytes
 		case <-chatTicker.C:
-			parcelX := int(p.X / PARCEL_SIZE)
-			parcelZ := int(p.Z / PARCEL_SIZE)
-			topic := fmt.Sprintf("chat:%d:%d", parcelX, parcelZ)
+			topic := fmt.Sprintf("chat:%s", hashLocation())
 
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.ChatData{
@@ -215,9 +222,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 				updateLocationTopics(client, p)
 			}
 
-			parcelX := int(p.X / PARCEL_SIZE)
-			parcelZ := int(p.Z / PARCEL_SIZE)
-			topic := fmt.Sprintf("position:%d:%d", parcelX, parcelZ)
+			topic := fmt.Sprintf("position:%s", hashLocation())
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.PositionData{
 				Time:      ms,

@@ -36,20 +36,17 @@ type peerMessage struct {
 }
 
 type peer struct {
-	isServer           bool
-	authenticationSent bool
 	Alias              string
+	Topics             map[string]struct{}
 	sendReliable       chan []byte
 	sendUnreliable     chan []byte
 	conn               webrtc.IWebRtcConnection
-
 	isAuthenticatedMux sync.Mutex
+	isClosedMux        sync.RWMutex
+	isServer           bool
+	authenticationSent bool
 	isAuthenticated    bool
-
-	isClosedMux sync.RWMutex
-	isClosed    bool
-
-	Topics map[string]struct{}
+	isClosed           bool
 }
 
 func (p *peer) hasTopic(topic string) bool {
