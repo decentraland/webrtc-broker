@@ -1,5 +1,5 @@
 # BUILD STAGE
-FROM golang:1.11.1 as builder
+FROM golang:1.12.0 as builder
 
 WORKDIR /usr/src/app
 
@@ -14,7 +14,7 @@ RUN make build
 RUN go install -v ./...
 
 # DEPLOY STAGE
-FROM golang:1.11.1
+FROM golang:1.12.0
 
 RUN apt-get update && apt-get install -y \
     libssl-dev

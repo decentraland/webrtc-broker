@@ -158,7 +158,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 	lastPositionMsg := time.Now()
 
 	profileTicker := time.NewTicker(1 * time.Second)
-	positionTicker := time.NewTicker(500 * time.Millisecond)
+	positionTicker := time.NewTicker(100 * time.Millisecond)
 	chatTicker := time.NewTicker(10 * time.Second)
 	defer profileTicker.Stop()
 	defer positionTicker.Stop()
