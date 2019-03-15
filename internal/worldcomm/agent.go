@@ -1,6 +1,8 @@
 package worldcomm
 
 import (
+	"time"
+
 	"github.com/decentraland/communications-server-go/internal/agent"
 )
 
@@ -50,4 +52,17 @@ func (agent *worldCommAgent) RecordTotalPeerConnections(total int) {
 
 func (agent *worldCommAgent) RecordTotalTopicSubscriptions(total int) {
 	agent.recordMetric("TotalTopicSubscriptions[topics]", float64(total))
+}
+
+func (agent *worldCommAgent) RecordInflight(duration time.Duration) {
+	agent.recordMetric("TimeInFlight[ns]", float64(duration.Nanoseconds()))
+}
+
+func (agent *worldCommAgent) RecordQueues(state *WorldCommunicationState) {
+	agent.recordMetric("topicQ[messages]", float64(len(state.topicQueue)))
+	agent.recordMetric("connectQ[messages]", float64(len(state.connectQueue)))
+	agent.recordMetric("webrtcControlQ[messages]", float64(len(state.webRtcControlQueue)))
+	agent.recordMetric("messagesQ[messages]", float64(len(state.messagesQueue)))
+	agent.recordMetric("unregisterQ[messages]", float64(len(state.unregisterQueue)))
+	agent.recordMetric("serverRegisteredQ[messages]", float64(len(state.serverRegisteredQueue)))
 }

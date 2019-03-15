@@ -1,11 +1,11 @@
 package coordinator
 
 type RandomServerSelector struct {
-	serverAliases map[string]bool
+	serverAliases map[uint64]bool
 }
 
 func MakeRandomServerSelector() *RandomServerSelector {
-	return &RandomServerSelector{serverAliases: make(map[string]bool)}
+	return &RandomServerSelector{serverAliases: make(map[uint64]bool)}
 }
 
 func (r *RandomServerSelector) ServerRegistered(server *Peer) {
@@ -16,8 +16,8 @@ func (r *RandomServerSelector) ServerUnregistered(server *Peer) {
 	delete(r.serverAliases, server.Alias)
 }
 
-func (r *RandomServerSelector) GetServerAliasList(forPeer *Peer) []string {
-	peers := []string{}
+func (r *RandomServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
+	peers := make([]uint64, 0, len(r.serverAliases))
 
 	for alias := range r.serverAliases {
 		peers = append(peers, alias)

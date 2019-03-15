@@ -26,8 +26,13 @@ var webRtcConfig = webrtc.Configuration{
 }
 
 type WorldData struct {
-	MyAlias          string
-	AvailableServers []string
+	MyAlias          uint64
+	AvailableServers []uint64
+}
+
+type ReceivedMessage struct {
+	Type       protocol.MessageType
+	RawMessage []byte
 }
 
 type Client struct {
@@ -37,8 +42,8 @@ type Client struct {
 	conn               *webrtc.PeerConnection
 	sendReliable       chan []byte
 	sendUnreliable     chan []byte
-	receivedReliable   chan []byte
-	receivedUnreliable chan []byte
+	receivedReliable   chan ReceivedMessage
+	receivedUnreliable chan ReceivedMessage
 	authMessage        chan []byte
 
 	coordinatorWriteQueue chan []byte
@@ -236,7 +241,7 @@ func (client *Client) startCoordination() error {
 	}
 }
 
-func (client *Client) connect(serverAlias string) error {
+func (client *Client) connect(serverAlias uint64) error {
 	log.Println("client connect()")
 
 	s := webrtc.SettingEngine{}
@@ -267,7 +272,7 @@ func (client *Client) connect(serverAlias string) error {
 	conn.OnDataChannel(func(d *webrtc.DataChannel) {
 
 		readPump := func(client *Client, c *datachannel.DataChannel, reliable bool) {
-			var received chan []byte
+			var received chan ReceivedMessage
 
 			if reliable {
 				received = client.receivedReliable
@@ -296,7 +301,7 @@ func (client *Client) connect(serverAlias string) error {
 				}
 
 				if received != nil {
-					received <- bytes
+					received <- ReceivedMessage{Type: header.Type, RawMessage: bytes}
 				}
 			}
 		}
@@ -330,8 +335,8 @@ func (client *Client) connect(serverAlias string) error {
 						log.Println("error writting", err)
 						return
 					}
-					n := len(messagesQueue)
 
+					n := len(messagesQueue)
 					for i := 0; i < n; i++ {
 						bytes = <-messagesQueue
 						_, err := c.Write(bytes)
@@ -353,7 +358,7 @@ func (client *Client) connect(serverAlias string) error {
 				log.Fatal("cannot detach datachannel")
 			}
 
-			reliable := d.Label == "reliable"
+			reliable := d.Label() == "reliable"
 
 			if reliable {
 				log.Println("Data channel open (reliable)")

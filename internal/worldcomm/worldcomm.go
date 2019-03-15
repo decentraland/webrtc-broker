@@ -28,15 +28,17 @@ type topicChange struct {
 }
 
 type peerMessage struct {
-	fromServer bool
-	reliable   bool
-	topic      string
-	from       *peer
-	rawMsg     []byte
+	receivedAt     time.Time
+	fromServer     bool
+	reliable       bool
+	topic          string
+	from           *peer
+	rawMsgToServer []byte
+	rawMsgToClient []byte
 }
 
 type peer struct {
-	Alias              string
+	Alias              uint64
 	Topics             map[string]struct{}
 	sendReliable       chan []byte
 	sendUnreliable     chan []byte
@@ -161,7 +163,7 @@ func removePeer(peers []*peer, p *peer) []*peer {
 	return peers
 }
 
-func findPeer(peers []*peer, alias string) *peer {
+func findPeer(peers []*peer, alias uint64) *peer {
 	for _, p := range peers {
 		if p.Alias == alias {
 			return p
@@ -185,23 +187,23 @@ type WorldCommunicationState struct {
 	coordinator           *Coordinator
 	Peers                 []*peer
 	topicQueue            chan topicChange
-	connectQueue          chan string
+	connectQueue          chan uint64
 	webRtcControlQueue    chan *protocol.WebRtcMessage
 	messagesQueue         chan *peerMessage
 	unregisterQueue       chan *peer
 	serverRegisteredQueue chan *peer
-	aliasChannel          chan string
+	aliasChannel          chan uint64
 	stop                  chan bool
 	softStop              bool
 	ReportPeriod          time.Duration
 
-	alias    string
+	alias    uint64
 	aliasMux sync.RWMutex
 
 	subscriptions topicSubscriptions
 }
 
-func (s *WorldCommunicationState) GetAlias() string {
+func (s *WorldCommunicationState) GetAlias() uint64 {
 	s.aliasMux.RLock()
 	defer s.aliasMux.RUnlock()
 	return s.alias
@@ -217,21 +219,13 @@ func (r *defaultReporter) Report(state *WorldCommunicationState) {
 	peersCount := len(state.Peers)
 	state.agent.RecordTotalPeerConnections(peersCount)
 	state.agent.RecordTotalTopicSubscriptions(peersCount)
+	state.agent.RecordQueues(state)
 
 	state.log.WithFields(logging.Fields{
+		"log_type":     "report",
 		"peers count":  peersCount,
 		"topics count": len(state.subscriptions),
 	}).Info("report")
-
-	state.log.WithFields(logging.Fields{
-		"topicQ_size":            len(state.topicQueue),
-		"connectQ_size":          len(state.connectQueue),
-		"webrtc_controlQ_size":   len(state.webRtcControlQueue),
-		"messagesQ_size":         len(state.messagesQueue),
-		"unregisterQ_size":       len(state.unregisterQueue),
-		"serverRegisteredQ_size": len(state.serverRegisteredQueue),
-	}).Info("queue status")
-
 }
 
 func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) WorldCommunicationState {
@@ -249,9 +243,9 @@ func MakeState(agent agent.IAgent, authMethod string, coordinatorUrl string) Wor
 		stop:                  make(chan bool),
 		unregisterQueue:       make(chan *peer, 255),
 		serverRegisteredQueue: make(chan *peer, 255),
-		aliasChannel:          make(chan string),
+		aliasChannel:          make(chan uint64),
 		topicQueue:            make(chan topicChange, 255),
-		connectQueue:          make(chan string, 255),
+		connectQueue:          make(chan uint64, 255),
 		messagesQueue:         make(chan *peerMessage, 255),
 		webRtcControlQueue:    make(chan *protocol.WebRtcMessage, 255),
 		Reporter:              &defaultReporter{},
@@ -276,51 +270,61 @@ func (p *peer) Close() {
 	}
 }
 
-func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, rawMsg []byte, topicMessage *protocol.TopicMessage) {
+func readPeerMessage(state *WorldCommunicationState, p *peer, reliable bool, rawMsg []byte) {
 	log := state.log
 	marshaller := state.marshaller
+	message := protocol.TopicMessage{}
 
-	if err := marshaller.Unmarshal(rawMsg, topicMessage); err != nil {
+	if err := marshaller.Unmarshal(rawMsg, &message); err != nil {
 		log.WithError(err).Debug("decode topic message failure")
 		return
 	}
 
 	if logTopicMessageReceived {
 		log.WithFields(logging.Fields{
+			"log_type": "message_received",
 			"peer":     p.Alias,
 			"reliable": reliable,
-			"topic":    topicMessage.Topic,
+			"topic":    message.Topic,
 		}).Debug("message received")
 	}
 
-	if p.isServer {
-		msg := &peerMessage{
-			fromServer: true,
-			reliable:   reliable,
-			topic:      topicMessage.Topic,
-			from:       p,
-			rawMsg:     rawMsg,
-		}
+	msg := &peerMessage{
+		fromServer: p.isServer,
+		receivedAt: time.Now(),
+		reliable:   reliable,
+		topic:      message.Topic,
+		from:       p,
+	}
 
-		state.messagesQueue <- msg
+	dataMessage := protocol.DataMessage{
+		Type: protocol.MessageType_DATA,
+		Body: message.Body,
+	}
+
+	if p.isServer {
+		dataMessage.FromAlias = message.FromAlias
 	} else {
-		topicMessage.FromAlias = p.Alias
-		rawMsg, err := marshaller.Marshal(topicMessage)
+		dataMessage.FromAlias = p.Alias
+		message.FromAlias = p.Alias
+
+		rawMsgToServer, err := marshaller.Marshal(&message)
 		if err != nil {
 			log.WithError(err).Error("encode topic message failure")
 			return
 		}
-
-		msg := &peerMessage{
-			fromServer: false,
-			reliable:   reliable,
-			topic:      topicMessage.Topic,
-			from:       p,
-			rawMsg:     rawMsg,
-		}
-
-		state.messagesQueue <- msg
+		msg.rawMsgToServer = rawMsgToServer
 	}
+
+	rawMsgToClient, err := marshaller.Marshal(&dataMessage)
+	if err != nil {
+		log.WithError(err).Error("encode data message failure")
+		return
+	}
+
+	msg.rawMsgToClient = rawMsgToClient
+
+	state.messagesQueue <- msg
 }
 
 func (p *peer) readReliablePump(state *WorldCommunicationState) {
@@ -328,7 +332,6 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 	auth := state.Auth
 	log := state.log
 	header := &protocol.WorldCommMessage{}
-	topicMessage := &protocol.TopicMessage{}
 
 	buffer := make([]byte, maxWorldCommMessageSize)
 
@@ -365,8 +368,12 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 			initialized = true
 
 			if !p.IsAuthenticated() && msgType != protocol.MessageType_AUTH {
-				log.WithField("peer", p.Alias).Debug("closing connection: sending data without authorization")
+				log.WithFields(logging.Fields{
+					"peer":    p.Alias,
+					"msgType": msgType,
+				}).Debug("closing connection: sending data without authorization")
 				p.Close()
+				state.unregisterQueue <- p
 				break
 			}
 		}
@@ -439,14 +446,15 @@ func (p *peer) readReliablePump(state *WorldCommunicationState) {
 				rawTopics: topicSubscriptionMessage.Topics,
 			}
 		case protocol.MessageType_TOPIC:
-			readPeerMessage(state, p, true, rawMsg, topicMessage)
+			readPeerMessage(state, p, true, rawMsg)
 		case protocol.MessageType_PING:
-			p.sendUnreliable <- rawMsg
+			outMsg := make([]byte, len(rawMsg))
+			copy(outMsg, rawMsg)
+			p.sendReliable <- outMsg
 		default:
 			log.WithField("type", msgType).Debug("unhandled reliable message from peer")
 		}
 	}
-
 }
 
 func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
@@ -454,7 +462,6 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 	log := state.log
 
 	header := &protocol.WorldCommMessage{}
-	topicMessage := &protocol.TopicMessage{}
 
 	buffer := make([]byte, maxWorldCommMessageSize)
 	initialized := false
@@ -487,17 +494,23 @@ func (p *peer) readUnreliablePump(state *WorldCommunicationState) {
 		if initialized {
 			initialized = true
 			if !p.IsAuthenticated() {
-				log.WithField("peer", p.Alias).Debug("closing connection: sending data without authorization")
+				log.WithFields(logging.Fields{
+					"peer":    p.Alias,
+					"msgType": msgType,
+				}).Debug("closing connection: sending data without authorization")
 				p.Close()
+				state.unregisterQueue <- p
 				return
 			}
 		}
 
 		switch msgType {
 		case protocol.MessageType_TOPIC:
-			readPeerMessage(state, p, false, rawMsg, topicMessage)
+			readPeerMessage(state, p, false, rawMsg)
 		case protocol.MessageType_PING:
-			p.sendUnreliable <- rawMsg
+			outMsg := make([]byte, len(rawMsg))
+			copy(outMsg, rawMsg)
+			p.sendUnreliable <- outMsg
 		default:
 			log.WithField("type", msgType).Debug("unhandled unreliable message from peer")
 		}
@@ -684,7 +697,7 @@ func Process(state *WorldCommunicationState) {
 	}
 }
 
-func initPeer(state *WorldCommunicationState, alias string) (*peer, error) {
+func initPeer(state *WorldCommunicationState, alias uint64) (*peer, error) {
 	log := state.log
 	log.WithFields(logging.Fields{
 		"id":   state.GetAlias(),
@@ -749,7 +762,7 @@ func processUnregister(state *WorldCommunicationState, p *peer) {
 	}
 }
 
-func processConnect(state *WorldCommunicationState, alias string) error {
+func processConnect(state *WorldCommunicationState, alias uint64) error {
 	log := state.log
 
 	oldP := findPeer(state.Peers, alias)
@@ -916,21 +929,23 @@ func processPeerMessage(state *WorldCommunicationState, msg *peerMessage) {
 			continue
 		}
 		if reliable {
-			p.sendReliable <- msg.rawMsg
+			p.sendReliable <- msg.rawMsgToClient
 		} else {
-			p.sendUnreliable <- msg.rawMsg
+			p.sendUnreliable <- msg.rawMsgToClient
 		}
 	}
 
-	if !fromServer {
+	state.agent.RecordInflight(time.Since(msg.receivedAt))
+
+	if !fromServer && msg.rawMsgToServer != nil {
 		for _, p := range subscription.servers {
 			if p.IsClosed() {
 				continue
 			}
 			if reliable {
-				p.sendReliable <- msg.rawMsg
+				p.sendReliable <- msg.rawMsgToServer
 			} else {
-				p.sendUnreliable <- msg.rawMsg
+				p.sendUnreliable <- msg.rawMsgToServer
 			}
 		}
 	}

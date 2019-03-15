@@ -29,7 +29,7 @@ const (
 )
 
 type MockServerSelector struct {
-	serverAliases []string
+	serverAliases []uint64
 }
 
 func (r *MockServerSelector) ServerRegistered(server *coordinator.Peer) {
@@ -38,8 +38,8 @@ func (r *MockServerSelector) ServerRegistered(server *coordinator.Peer) {
 
 func (r *MockServerSelector) ServerUnregistered(server *coordinator.Peer) {}
 
-func (r *MockServerSelector) GetServerAliasList(forPeer *coordinator.Peer) []string {
-	peers := []string{}
+func (r *MockServerSelector) GetServerAliasList(forPeer *coordinator.Peer) []uint64 {
+	peers := []uint64{}
 
 	for _, alias := range r.serverAliases {
 		peers = append(peers, alias)
@@ -78,7 +78,7 @@ func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server,
 	require.NoError(t, err)
 
 	selector := &MockServerSelector{
-		serverAliases: []string{},
+		serverAliases: []uint64{},
 	}
 	cs := coordinator.MakeState(agent, selector)
 
@@ -117,9 +117,9 @@ type peerSnapshot struct {
 }
 
 type worldCommSnapshot struct {
-	Alias      string
+	Alias      uint64
 	PeersCount int
-	Peers      map[string]peerSnapshot
+	Peers      map[uint64]peerSnapshot
 }
 
 type testReporter struct {
@@ -130,7 +130,7 @@ type testReporter struct {
 func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 	select {
 	case <-r.RequestData:
-		peers := make(map[string]peerSnapshot)
+		peers := make(map[uint64]peerSnapshot)
 
 		for _, p := range state.Peers {
 			s := peerSnapshot{
@@ -184,7 +184,7 @@ func startCommServer(t *testing.T, discoveryUrl string) *testReporter {
 
 type TestClient struct {
 	client *Client
-	alias  string
+	alias  uint64
 	avatar string
 }
 
@@ -192,8 +192,8 @@ func makeTestClient(id string, connectUrl string) *TestClient {
 	url := fmt.Sprintf("%s?method=testAuth", connectUrl)
 	client := MakeClient(id, url)
 
-	client.receivedReliable = make(chan []byte, 256)
-	client.receivedUnreliable = make(chan []byte, 256)
+	client.receivedReliable = make(chan ReceivedMessage, 256)
+	client.receivedUnreliable = make(chan ReceivedMessage, 256)
 	return &TestClient{client: client, avatar: getRandomAvatar()}
 }
 
@@ -212,12 +212,13 @@ func (tc *TestClient) sendTopicSubscriptionMessage(t *testing.T, topics map[stri
 	require.NoError(t, tc.client.sendTopicSubscriptionMessage(topics))
 }
 
-func (tc *TestClient) encodeTopicMessage(t *testing.T, topic string) []byte {
+func (tc *TestClient) encodeProfileMessage(t *testing.T, topic string) []byte {
 	ms := utils.NowMs()
 	bytes, err := encodeTopicMessage(topic, &protocol.ProfileData{
+		Category:    protocol.Category_PROFILE,
 		Time:        ms,
 		AvatarType:  tc.avatar,
-		DisplayName: tc.alias,
+		DisplayName: fmt.Sprintf("%d", tc.alias),
 		PublicKey:   "key",
 	})
 
@@ -227,18 +228,19 @@ func (tc *TestClient) encodeTopicMessage(t *testing.T, topic string) []byte {
 }
 
 func (tc *TestClient) sendProfileUnreliableMessage(t *testing.T, topic string) {
-	tc.client.sendUnreliable <- tc.encodeTopicMessage(t, topic)
+	tc.client.sendUnreliable <- tc.encodeProfileMessage(t, topic)
 }
 
 func (tc *TestClient) sendProfileReliableMessage(t *testing.T, topic string) {
-	tc.client.sendReliable <- tc.encodeTopicMessage(t, topic)
+	tc.client.sendReliable <- tc.encodeProfileMessage(t, topic)
 }
 
 func TestE2E(t *testing.T) {
 	_, server, discoveryUrl, connectUrl := startCoordinator(t)
 	defer server.Close()
 
-	topicMessage := &protocol.TopicMessage{}
+	dataMessage := protocol.DataMessage{}
+	profileData := protocol.ProfileData{}
 
 	printTitle("starting comm servers")
 	comm1Reporter := startCommServer(t, discoveryUrl)
@@ -311,17 +313,19 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c1.client.receivedReliable, 1)
 	require.Len(t, c2.client.receivedReliable, 1)
 
-	bytes := <-c1.client.receivedReliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c2.alias, topicMessage.GetFromAlias())
+	recvMsg := <-c1.client.receivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c2.alias, dataMessage.FromAlias)
 
-	bytes = <-c2.client.receivedReliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c1.alias, topicMessage.GetFromAlias())
+	recvMsg = <-c2.client.receivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c1.alias, dataMessage.FromAlias)
 
 	printTitle("Each client sends a profile message, by unreliable channel")
 	c1.sendProfileUnreliableMessage(t, "profile")
@@ -331,17 +335,19 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c1.client.receivedUnreliable, 1)
 	require.Len(t, c2.client.receivedUnreliable, 1)
 
-	bytes = <-c1.client.receivedUnreliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c2.alias, topicMessage.GetFromAlias())
+	recvMsg = <-c1.client.receivedUnreliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c2.alias, dataMessage.FromAlias)
 
-	bytes = <-c2.client.receivedUnreliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c1.alias, topicMessage.GetFromAlias())
+	recvMsg = <-c2.client.receivedUnreliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c1.alias, dataMessage.FromAlias)
 
 	printTitle("Remove topic")
 	c2.sendTopicSubscriptionMessage(t, map[string]bool{})
@@ -378,17 +384,19 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c1.client.receivedReliable, 1)
 	require.Len(t, c2.client.receivedReliable, 1)
 
-	bytes = <-c1.client.receivedReliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c2.alias, topicMessage.GetFromAlias())
+	recvMsg = <-c1.client.receivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c2.alias, dataMessage.FromAlias)
 
-	bytes = <-c2.client.receivedReliable
-	require.NoError(t, proto.Unmarshal(bytes, topicMessage))
-	require.Equal(t, protocol.MessageType_TOPIC, topicMessage.GetType())
-	require.Equal(t, "profile", topicMessage.GetTopic())
-	require.Equal(t, c1.alias, topicMessage.GetFromAlias())
+	recvMsg = <-c2.client.receivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
+	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
+	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
+	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
+	require.Equal(t, c1.alias, dataMessage.FromAlias)
 
 	log.Println("TEST END")
 }

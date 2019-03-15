@@ -5,6 +5,10 @@ build:
 	go build -o build/coordinator ./cmd/coordinator
 	go build -o build/server ./cmd/server
 
+escape:
+	go build -gcflags -m github.com/decentraland/communications-server-go/internal/worldcomm
+	go build -gcflags -m github.com/decentraland/communications-server-go/internal/coordinator
+
 compile-protocol:
 	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./commproto.proto
 
@@ -12,7 +16,6 @@ test: build
 	go test -race $(TEST_FLAGS) \
 github.com/decentraland/communications-server-go/internal/worldcomm \
 github.com/decentraland/communications-server-go/internal/coordinator
-
 
 cover: TEST_FLAGS=-coverprofile=coverage.out
 cover: test
@@ -35,6 +38,9 @@ fmt:
 
 version:
 	git rev-parse HEAD
+
+tidy:
+	go mod tidy
 
 todo:
 	grep --include "*.go" -r TODO *

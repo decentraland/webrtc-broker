@@ -34,6 +34,8 @@ func main() {
 		return
 	}
 
+	defer logging.LogPanic()
+
 	agent, err := agent.Make(*appName, *newrelicApiKey)
 	if err != nil {
 		log.Fatal("Cannot initialize new relic: ", err)

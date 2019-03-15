@@ -42,18 +42,23 @@ var config = pions.Configuration{
 
 func openUnreliableDataChannel(conn *webRtcConnection) error {
 	var maxRetransmits uint16 = 0
-	options := &pions.DataChannelInit{MaxRetransmits: &maxRetransmits}
+	var ordered bool = false
+	options := &pions.DataChannelInit{
+		MaxRetransmits: &maxRetransmits,
+		Ordered:        &ordered,
+	}
 	c, err := conn.conn.CreateDataChannel("unreliable", options)
 
 	if err != nil {
-		log.WithField("error", err).Debug("cannot create new unreliable data channel")
+		log.WithField("error", err).Error("cannot create new unreliable data channel")
 		return err
 	}
 
 	c.OnOpen(func() {
 		log.WithFields(log.Fields{
-			"channel_label": c.Label,
-			"channel_id":    *c.ID,
+			"channel_label": c.Label(),
+			"channel_id":    *c.ID(),
+			"log_type":      "webrtc",
 		}).Info("Unreliable data channel open")
 		d, err := c.Detach()
 		if err != nil {
@@ -70,14 +75,15 @@ func openUnreliableDataChannel(conn *webRtcConnection) error {
 func openReliableDataChannel(conn *webRtcConnection) error {
 	c, err := conn.conn.CreateDataChannel("reliable", nil)
 	if err != nil {
-		log.WithField("error", err).Debug("cannot create new reliable data channel")
+		log.WithField("error", err).Error("cannot create new reliable data channel")
 		return err
 	}
 
 	c.OnOpen(func() {
 		log.WithFields(log.Fields{
-			"channel_label": c.Label,
-			"channel_id":    *c.ID,
+			"channel_label": c.Label(),
+			"channel_id":    *c.ID(),
+			"log_type":      "webrtc",
 		}).Info("Reliable data channel open")
 		d, err := c.Detach()
 		if err != nil {
@@ -202,6 +208,18 @@ func (conn *webRtcConnection) ReadUnreliable(bytes []byte) (int, error) {
 }
 
 func (conn *webRtcConnection) Close() {
+	if conn.reliableDataChannel != nil {
+		if err := conn.reliableDataChannel.Close(); err != nil {
+			log.WithError(err).Debug("error closing reliable data channel")
+		}
+	}
+
+	if conn.unreliableDataChannel != nil {
+		if err := conn.unreliableDataChannel.Close(); err != nil {
+			log.WithError(err).Debug("error closing unreliable data channel")
+		}
+	}
+
 	if err := conn.conn.Close(); err != nil {
 		// NOTE: this is not really an error, since it will fail if the connection is already dropped
 		log.WithError(err).Debug("error closing webrtc connection")
@@ -242,7 +260,9 @@ func (w *WebRtc) NewConnection() (IWebRtcConnection, error) {
 	}
 
 	conn.OnICEConnectionStateChange(func(connectionState pions.ICEConnectionState) {
-		log.WithField("iceConnectionState", connectionState.String()).Debug("ICE Connection State has changed:")
+		log.
+			WithField("iceConnectionState", connectionState.String()).
+			Debugf("ICE Connection State has changed: %s", connectionState.String())
 		if connectionState == pions.ICEConnectionStateDisconnected {
 			log.Debug("Connection state is disconnected, close connection")
 			conn.Close()

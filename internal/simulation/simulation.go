@@ -64,6 +64,7 @@ type BotOptions struct {
 	Checkpoints               []V3
 	DurationMs                uint
 	SubscribeToPositionTopics bool
+	TrackStats                bool
 }
 
 func updateLocationTopics(client *Client, p V3) {
@@ -122,6 +123,72 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 	}
 	client := MakeClient(options.Id, url)
 
+	if options.TrackStats {
+		client.receivedUnreliable = make(chan ReceivedMessage, 256)
+
+		go func() {
+			peers := make(map[uint64]*Stats)
+			dataMessage := protocol.DataMessage{}
+			dataHeader := protocol.DataHeader{}
+
+			onMessage := func(msgType protocol.MessageType, rawMsg []byte) {
+				if msgType != protocol.MessageType_DATA {
+					return
+				}
+
+				if err := proto.Unmarshal(rawMsg, &dataMessage); err != nil {
+					log.Println("error unmarshalling data message")
+					return
+				}
+
+				if err := proto.Unmarshal(rawMsg, &dataHeader); err != nil {
+					log.Println("error unmarshalling data header")
+					return
+				}
+
+				if dataHeader.Category != protocol.Category_POSITION {
+					return
+				}
+
+				alias := dataMessage.FromAlias
+				stats := peers[alias]
+
+				if stats == nil {
+					stats = &Stats{}
+					peers[alias] = stats
+				}
+
+				stats.Seen(time.Now())
+			}
+
+			reportTicker := time.NewTicker(30 * time.Second)
+			defer reportTicker.Stop()
+
+			for {
+				select {
+				case msg := <-client.receivedUnreliable:
+					onMessage(msg.Type, msg.RawMessage)
+
+					n := len(client.receivedUnreliable)
+					for i := 0; i < n; i++ {
+						msg = <-client.receivedUnreliable
+						onMessage(msg.Type, msg.RawMessage)
+					}
+				case <-reportTicker.C:
+					log.Println("Avg duration between position messages")
+					for alias, stats := range peers {
+						fmt.Printf("%d: %f ms\n", alias, stats.Avg())
+
+						if time.Since(stats.LastSeen).Seconds() > 1 {
+							delete(peers, alias)
+						}
+					}
+				}
+
+			}
+		}()
+	}
+
 	go func() {
 		log.Fatal(client.startCoordination())
 	}()
@@ -178,6 +245,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.ProfileData{
+				Category:    protocol.Category_PROFILE,
 				Time:        ms,
 				AvatarType:  avatar,
 				DisplayName: peerId,
@@ -192,6 +260,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.ChatData{
+				Category:  protocol.Category_CHAT,
 				Time:      ms,
 				MessageId: ksuid.New().String(),
 				Text:      "hi",
@@ -225,6 +294,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 			topic := fmt.Sprintf("position:%s", hashLocation())
 			ms := utils.NowMs()
 			bytes, err := encodeTopicMessage(topic, &protocol.PositionData{
+				Category:  protocol.Category_POSITION,
 				Time:      ms,
 				PositionX: float32(p.X),
 				PositionY: float32(p.Y),
