@@ -23,6 +23,7 @@ func main() {
 	nBotsP := flag.Int("n", 5, "number of bots")
 	authMethodP := flag.String("authMethod", "noop", "")
 	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
+	trackStats := flag.Bool("trackStats", false, "")
 
 	flag.Parse()
 
@@ -63,6 +64,7 @@ func main() {
 			Checkpoints:               checkpoints[:],
 			DurationMs:                10000,
 			SubscribeToPositionTopics: subscribe,
+			TrackStats:                *trackStats,
 		}
 
 		go simulation.StartBot(addr, opts)

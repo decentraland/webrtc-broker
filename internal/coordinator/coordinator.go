@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/decentraland/communications-server-go/internal/logging"
 	"github.com/decentraland/communications-server-go/internal/ws"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
-	"github.com/segmentio/ksuid"
 )
 
 const (
@@ -29,11 +27,11 @@ type inMessage struct {
 	msgType protocol.MessageType
 	from    *Peer
 	bytes   []byte
-	toAlias string
+	toAlias uint64
 }
 
 type Peer struct {
-	Alias    string
+	Alias    uint64
 	conn     ws.IWebsocket
 	send     chan []byte
 	isClosed bool
@@ -43,7 +41,7 @@ type Peer struct {
 type IServerSelector interface {
 	ServerRegistered(server *Peer)
 	ServerUnregistered(server *Peer)
-	GetServerAliasList(forPeer *Peer) []string
+	GetServerAliasList(forPeer *Peer) []uint64
 }
 
 type CoordinatorState struct {
@@ -54,7 +52,9 @@ type CoordinatorState struct {
 	log            *logging.Logger
 	agent          coordinatorAgent
 
-	Peers              map[string]*Peer
+	LastPeerAlias uint64
+
+	Peers              map[uint64]*Peer
 	registerCommServer chan *Peer
 	registerClient     chan *Peer
 	unregister         chan *Peer
@@ -71,7 +71,7 @@ func MakeState(agent agent.IAgent, serverSelector IServerSelector) CoordinatorSt
 		marshaller:         &protocol.Marshaller{},
 		log:                logging.New(),
 		agent:              coordinatorAgent{agent: agent},
-		Peers:              make(map[string]*Peer),
+		Peers:              make(map[uint64]*Peer),
 		registerCommServer: make(chan *Peer, 255),
 		registerClient:     make(chan *Peer, 255),
 		unregister:         make(chan *Peer, 255),
@@ -204,11 +204,6 @@ func readPump(state *CoordinatorState, p *Peer) {
 		case protocol.MessageType_CONNECT:
 			if err := marshaller.Unmarshal(bytes, connectMessage); err != nil {
 				log.WithError(err).Debug("decode connect message failure")
-				continue
-			}
-
-			if connectMessage.ToAlias == "" {
-				log.Warn("error: connect message should always specify peer alias")
 				continue
 			}
 
@@ -353,7 +348,8 @@ func Process(state *CoordinatorState) {
 }
 
 func registerCommServer(state *CoordinatorState, p *Peer) error {
-	alias := fmt.Sprintf("server|%s", ksuid.New().String())
+	state.LastPeerAlias += 1
+	alias := state.LastPeerAlias
 	p.Alias = alias
 
 	servers := state.serverSelector.GetServerAliasList(p)
@@ -371,7 +367,8 @@ func registerCommServer(state *CoordinatorState, p *Peer) error {
 }
 
 func registerClient(state *CoordinatorState, p *Peer) {
-	alias := fmt.Sprintf("client|%s", ksuid.New().String())
+	state.LastPeerAlias += 1
+	alias := state.LastPeerAlias
 	p.Alias = alias
 
 	servers := state.serverSelector.GetServerAliasList(p)

@@ -120,7 +120,7 @@ func TestReadPump(t *testing.T) {
 
 		conn := makeMockWebsocket()
 		p := makeCommServer(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 		return state, conn, p
 	}
 
@@ -130,7 +130,7 @@ func TestReadPump(t *testing.T) {
 
 		msg := &protocol.WebRtcMessage{
 			Type:    protocol.MessageType_WEBRTC_ANSWER,
-			ToAlias: "peer2",
+			ToAlias: 2,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
 		go readPump(&state, client)
@@ -141,28 +141,12 @@ func TestReadPump(t *testing.T) {
 		require.Len(t, state.signalingQueue, 1)
 
 		in := <-state.signalingQueue
-		require.Equal(t, in.msgType, msg.Type)
-		require.Equal(t, in.from, p)
-		require.Equal(t, in.toAlias, "peer2")
+		require.Equal(t, msg.Type, in.msgType)
+		require.Equal(t, p, in.from, p)
+		require.Equal(t, uint64(2), in.toAlias)
 
 		require.NoError(t, proto.Unmarshal(in.bytes, msg))
-		require.Equal(t, msg.FromAlias, "peer1")
-	})
-
-	t.Run("connect message (no alias)", func(t *testing.T) {
-		state, conn, client := setup()
-		defer closeState(&state)
-
-		msg := &protocol.ConnectMessage{
-			Type: protocol.MessageType_CONNECT,
-		}
-		require.NoError(t, conn.PrepareToRead(msg))
-		go readPump(&state, client)
-
-		p := <-state.unregister
-
-		require.Equal(t, client, p)
-		require.Len(t, state.signalingQueue, 0)
+		require.Equal(t, uint64(1), msg.FromAlias)
 	})
 
 	t.Run("connect message (with alias)", func(t *testing.T) {
@@ -171,7 +155,7 @@ func TestReadPump(t *testing.T) {
 
 		msg := &protocol.ConnectMessage{
 			Type:    protocol.MessageType_CONNECT,
-			ToAlias: "peer2",
+			ToAlias: 2,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
 		go readPump(&state, client)
@@ -182,9 +166,9 @@ func TestReadPump(t *testing.T) {
 		require.Len(t, state.signalingQueue, 1)
 
 		in := <-state.signalingQueue
-		require.Equal(t, in.msgType, msg.Type)
-		require.Equal(t, in.from, p)
-		require.Equal(t, in.toAlias, "peer2")
+		require.Equal(t, msg.Type, in.msgType)
+		require.Equal(t, p, in.from)
+		require.Equal(t, uint64(2), in.toAlias)
 	})
 }
 
@@ -198,7 +182,7 @@ func TestWritePump(t *testing.T) {
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 		i := 0
 		conn.OnWrite = func(bytes []byte) {
 			require.Equal(t, bytes, msg)
@@ -225,7 +209,7 @@ func TestWritePump(t *testing.T) {
 			return errors.New("test error on write")
 		}
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 
 		p.send <- msg
 		p.send <- msg
@@ -247,7 +231,7 @@ func TestWritePump(t *testing.T) {
 			return errors.New("test error on write")
 		}
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 
 		p.send <- msg
 		p.send <- msg
@@ -354,14 +338,14 @@ func TestUnregister(t *testing.T) {
 
 	conn := makeMockWebsocket()
 	s := makeCommServer(conn)
-	s.Alias = "peer1"
+	s.Alias = 1
 	defer s.Close()
 	state.Peers[s.Alias] = s
 	selector.serverAliases[s.Alias] = true
 
 	conn2 := makeMockWebsocket()
 	s2 := makeCommServer(conn2)
-	s2.Alias = "peer2"
+	s2.Alias = 2
 	defer s.Close()
 	state.Peers[s2.Alias] = s2
 	selector.serverAliases[s2.Alias] = true
@@ -385,12 +369,12 @@ func TestSignaling(t *testing.T) {
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 		defer p.Close()
 
 		conn2 := makeMockWebsocket()
 		p2 := makeClient(conn2)
-		p2.Alias = "peer2"
+		p2.Alias = 2
 		defer p2.Close()
 
 		state.Peers[p.Alias] = p
@@ -425,7 +409,7 @@ func TestSignaling(t *testing.T) {
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 		defer p.Close()
 
 		state.Peers[p.Alias] = p
@@ -436,7 +420,7 @@ func TestSignaling(t *testing.T) {
 			msgType: protocol.MessageType_WEBRTC_ANSWER,
 			from:    p,
 			bytes:   bytes,
-			toAlias: "peer2",
+			toAlias: 2,
 		}
 
 		state.stop <- true
@@ -449,12 +433,12 @@ func TestSignaling(t *testing.T) {
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
-		p.Alias = "peer1"
+		p.Alias = 1
 		defer p.Close()
 
 		conn2 := makeMockWebsocket()
 		p2 := makeClient(conn2)
-		p2.Alias = "peer2"
+		p2.Alias = 2
 		p2.Close()
 
 		state.Peers[p.Alias] = p

@@ -28,8 +28,26 @@ func SetReportCaller(reportCaller bool) {
 }
 
 func New() *Logger {
+	formatter := logrus.JSONFormatter{
+		FieldMap: logrus.FieldMap{
+			logrus.FieldKeyTime: "@timestamp",
+		},
+	}
+
 	log := logrus.New()
 	log.SetLevel(globalLevel)
 	log.SetReportCaller(globalSetReportCaller)
+	log.SetFormatter(&formatter)
+	logrus.SetFormatter(&formatter)
+
 	return log
+}
+
+func LogPanic() {
+	if r := recover(); r != nil {
+		err, ok := r.(error)
+		if ok {
+			logrus.WithError(err).Error("panic")
+		}
+	}
 }

@@ -62,8 +62,8 @@ func TestCoordinatorReadPump(t *testing.T) {
 		state, conn := setup()
 		msg := &protocol.WelcomeMessage{
 			Type:             protocol.MessageType_WELCOME,
-			Alias:            "server3",
-			AvailableServers: []string{"server1", "server2"},
+			Alias:            3,
+			AvailableServers: []uint64{1, 2},
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
 		go state.coordinator.readPump(&state)
@@ -73,11 +73,13 @@ func TestCoordinatorReadPump(t *testing.T) {
 		require.Len(t, state.coordinator.send, 2)
 
 		connectMessage := &protocol.ConnectMessage{}
-		require.Equal(t, alias, "server3")
+		require.Equal(t, uint64(3), alias)
+
 		require.NoError(t, proto.Unmarshal(<-state.coordinator.send, connectMessage))
-		require.Equal(t, connectMessage.ToAlias, "server1")
+		require.Equal(t, uint64(1), connectMessage.ToAlias)
+
 		require.NoError(t, proto.Unmarshal(<-state.coordinator.send, connectMessage))
-		require.Equal(t, connectMessage.ToAlias, "server2")
+		require.Equal(t, uint64(2), connectMessage.ToAlias)
 	})
 
 	t.Run("webrtc message", func(t *testing.T) {
@@ -96,14 +98,14 @@ func TestCoordinatorReadPump(t *testing.T) {
 		state, conn := setup()
 		msg := &protocol.ConnectMessage{
 			Type:      protocol.MessageType_CONNECT,
-			FromAlias: "server2",
+			FromAlias: 2,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
 		go state.coordinator.readPump(&state)
 
 		<-state.stop
 		require.Len(t, state.connectQueue, 1)
-		require.Equal(t, <-state.connectQueue, "server2")
+		require.Equal(t, uint64(2), <-state.connectQueue)
 	})
 }
 

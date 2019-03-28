@@ -30,6 +30,9 @@ func main() {
 		log.Error("error setting log level")
 		return
 	}
+
+	defer logging.LogPanic()
+
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 
 	agent, err := agent.Make(*appName, *newrelicApiKey)
