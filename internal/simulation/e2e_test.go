@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/decentraland/communications-server-go/internal/authentication"
+	"github.com/decentraland/communications-server-go/internal/webrtc"
+
 	"github.com/decentraland/communications-server-go/internal/agent"
 	"github.com/decentraland/communications-server-go/internal/coordinator"
 	_testing "github.com/decentraland/communications-server-go/internal/testing"
@@ -16,6 +19,7 @@ import (
 	"github.com/decentraland/communications-server-go/internal/worldcomm"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,8 +116,7 @@ func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server,
 }
 
 type peerSnapshot struct {
-	IsAuthenticated bool
-	Topics          map[string]bool
+	Topics map[string]bool
 }
 
 type worldCommSnapshot struct {
@@ -134,8 +137,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 
 		for _, p := range state.Peers {
 			s := peerSnapshot{
-				IsAuthenticated: p.IsAuthenticated(),
-				Topics:          make(map[string]bool),
+				Topics: make(map[string]bool),
 			}
 
 			for topic := range p.Topics {
@@ -146,7 +148,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 		}
 
 		snapshot := worldCommSnapshot{
-			Alias:      state.GetAlias(),
+			Alias:      state.Alias,
 			PeersCount: len(state.Peers),
 			Peers:      peers,
 		}
@@ -163,18 +165,35 @@ func (r *testReporter) GetStateSnapshot() worldCommSnapshot {
 func startCommServer(t *testing.T, discoveryUrl string) *testReporter {
 	agent, err := agent.Make(appName, "")
 	require.NoError(t, err)
-	ws := worldcomm.MakeState(agent, "testAuth", discoveryUrl)
 
-	ws.ReportPeriod = 1 * time.Second
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.TextFormatter{})
+	services := worldcomm.Services{
+		Auth:       authentication.Make(),
+		Marshaller: &protocol.Marshaller{},
+		Log:        logger,
+		WebRtc:     webrtc.MakeWebRtc(),
+		Agent:      &worldcomm.WorldCommAgent{Agent: agent},
+		Zipper:     &utils.GzipCompression{},
+	}
+
+	authenticator := makeTestAuthenticator()
+	services.Auth.AddOrUpdateAuthenticator("testAuth", authenticator)
+
 	reporter := &testReporter{
 		RequestData: make(chan bool),
 		Data:        make(chan worldCommSnapshot),
 	}
 
-	ws.Reporter = reporter
+	config := worldcomm.Config{
+		AuthMethod:     "testAuth",
+		CoordinatorUrl: discoveryUrl,
+		Services:       services,
+		ReportPeriod:   1 * time.Second,
+		Reporter:       reporter,
+	}
 
-	auth := makeTestAuthenticator()
-	ws.Auth.AddOrUpdateAuthenticator("testAuth", auth)
+	ws := worldcomm.MakeState(config)
 	t.Log("starting communication server node", discoveryUrl)
 
 	require.NoError(t, worldcomm.ConnectCoordinator(&ws))
@@ -251,11 +270,11 @@ func TestE2E(t *testing.T) {
 
 	printTitle("Starting client1")
 	client1WorldData := c1.start(t)
-	require.NoError(t, c1.client.connect(client1WorldData.AvailableServers[0]))
+	require.NoError(t, c1.client.connect(client1WorldData.MyAlias, client1WorldData.AvailableServers[0]))
 
 	printTitle("Starting client2")
 	client2WorldData := c2.start(t)
-	require.NoError(t, c2.client.connect(client2WorldData.AvailableServers[1]))
+	require.NoError(t, c2.client.connect(client1WorldData.MyAlias, client2WorldData.AvailableServers[1]))
 
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
@@ -284,14 +303,16 @@ func TestE2E(t *testing.T) {
 	c1.client.authMessage <- authBytes
 	c2.client.authMessage <- authBytes
 
+	recvMsg := <-c1.client.receivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
+
+	recvMsg = <-c2.client.receivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
+
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
 	comm1Snapshot = comm1Reporter.GetStateSnapshot()
 	comm2Snapshot = comm2Reporter.GetStateSnapshot()
-	require.True(t, comm1Snapshot.Peers[comm2Snapshot.Alias].IsAuthenticated)
-	require.True(t, comm2Snapshot.Peers[comm1Snapshot.Alias].IsAuthenticated)
-	require.True(t, comm1Snapshot.Peers[c1.alias].IsAuthenticated)
-	require.True(t, comm2Snapshot.Peers[c2.alias].IsAuthenticated)
 
 	printTitle("Both clients are subscribing to 'profile' topic")
 	c1.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
@@ -309,11 +330,11 @@ func TestE2E(t *testing.T) {
 	c2.sendProfileReliableMessage(t, "profile")
 
 	// NOTE wait until messages are received
-	time.Sleep(sleepPeriod)
+	time.Sleep(longSleepPeriod)
 	require.Len(t, c1.client.receivedReliable, 1)
 	require.Len(t, c2.client.receivedReliable, 1)
 
-	recvMsg := <-c1.client.receivedReliable
+	recvMsg = <-c1.client.receivedReliable
 	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
 	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
 	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
@@ -331,7 +352,7 @@ func TestE2E(t *testing.T) {
 	c1.sendProfileUnreliableMessage(t, "profile")
 	c2.sendProfileUnreliableMessage(t, "profile")
 
-	time.Sleep(sleepPeriod)
+	time.Sleep(longSleepPeriod)
 	require.Len(t, c1.client.receivedUnreliable, 1)
 	require.Len(t, c2.client.receivedUnreliable, 1)
 
@@ -361,13 +382,11 @@ func TestE2E(t *testing.T) {
 	c2.client.stopUnreliableQueue <- true
 	go c2.client.conn.Close()
 	c2.client.conn = nil
-	c2.client.connect(comm1Snapshot.Alias)
+	c2.client.connect(client2WorldData.MyAlias, comm1Snapshot.Alias)
 
 	c2.client.authMessage <- authBytes
-	time.Sleep(longSleepPeriod)
-	comm1Snapshot = comm1Reporter.GetStateSnapshot()
-	require.True(t, comm1Snapshot.Peers[c1.alias].IsAuthenticated)
-	require.True(t, comm1Snapshot.Peers[c2.alias].IsAuthenticated)
+	recvMsg = <-c2.client.receivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
 
 	printTitle("Subscribe to topics again")
 	c2.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})

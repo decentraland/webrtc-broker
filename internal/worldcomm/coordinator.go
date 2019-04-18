@@ -31,7 +31,7 @@ func makeCoordinator(url string) *Coordinator {
 }
 
 func (c *Coordinator) Connect(state *WorldCommunicationState, authMethod string) error {
-	url, err := state.Auth.GenerateAuthURL(authMethod, c.url, protocol.Role_COMMUNICATION_SERVER)
+	url, err := state.services.Auth.GenerateAuthURL(authMethod, c.url, protocol.Role_COMMUNICATION_SERVER)
 
 	if err != nil {
 		c.log.WithError(err).Error("error generating communication server auth url")
@@ -55,25 +55,25 @@ func (c *Coordinator) Connect(state *WorldCommunicationState, authMethod string)
 
 func (c *Coordinator) Send(state *WorldCommunicationState, msg protocol.Message) error {
 	log := c.log
-	bytes, err := state.marshaller.Marshal(msg)
+	bytes, err := state.services.Marshaller.Marshal(msg)
 	if err != nil {
 		log.WithError(err).Error("encode message failure")
 		return err
 	}
 
-	state.agent.RecordSentToCoordinatorSize(len(bytes))
+	state.services.Agent.RecordSentToCoordinatorSize(len(bytes))
 	c.send <- bytes
 	return nil
 }
 
-func (c *Coordinator) readPump(state *WorldCommunicationState) {
+func (c *Coordinator) readPump(state *WorldCommunicationState, welcomeChannel chan *protocol.WelcomeMessage) {
 	defer func() {
 		c.Close()
 		state.stop <- true
 	}()
 
 	log := c.log
-	marshaller := state.marshaller
+	marshaller := state.services.Marshaller
 	c.conn.SetReadLimit(maxCoordinatorMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(s string) error {
@@ -93,7 +93,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 			break
 		}
 
-		state.agent.RecordReceivedFromCoordinatorSize(len(bytes))
+		state.services.Agent.RecordReceivedFromCoordinatorSize(len(bytes))
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithError(err).Debug("decode header failure")
 			continue
@@ -110,34 +110,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 			}
 
 			log.Info("my alias is ", welcomeMessage.Alias)
-			state.aliasChannel <- welcomeMessage.Alias
-			connectMessage := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT}
-
-			authMessage, err := state.Auth.GenerateAuthMessage(state.authMethod,
-				protocol.Role_COMMUNICATION_SERVER)
-			if err != nil {
-				log.WithError(err).Error("cannot create auth message (processing welcome)")
-				return
-			}
-
-			bytes, err := state.marshaller.Marshal(authMessage)
-			if err != nil {
-				log.WithError(err).Error("cannot encode auth message (processing welcome)")
-				return
-			}
-
-			for _, alias := range welcomeMessage.AvailableServers {
-				connectMessage.ToAlias = alias
-				state.coordinator.Send(state, connectMessage)
-
-				p, err := initPeer(state, alias)
-				if err != nil {
-					log.WithError(err).Error("init peer error creating server (processing welcome)")
-					return
-				}
-				p.sendReliable <- bytes
-				p.authenticationSent = true
-			}
+			welcomeChannel <- welcomeMessage
 		case protocol.MessageType_WEBRTC_OFFER, protocol.MessageType_WEBRTC_ANSWER, protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {
@@ -151,10 +124,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState) {
 				log.WithError(err).Debug("decode connect message failure")
 				continue
 			}
-			log.WithFields(logging.Fields{
-				"id": state.GetAlias(),
-				"to": connectMessage.FromAlias,
-			}).Info("Connect message received")
+			log.WithFields(logging.Fields{"to": connectMessage.FromAlias}).Debug("Connect message received")
 			state.connectQueue <- connectMessage.FromAlias
 		default:
 			log.WithField("type", msgType).Debug("unhandled message from coordinator")

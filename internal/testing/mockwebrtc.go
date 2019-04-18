@@ -2,66 +2,100 @@ package testing
 
 import (
 	"github.com/decentraland/communications-server-go/internal/webrtc"
+	"github.com/stretchr/testify/mock"
 )
 
-type MockWebRtcConnection struct {
-	onUnreliableChannelOpen func()
-	onReliableChannelOpen   func()
-	CreateOffer_            func(conn *MockWebRtcConnection) (string, error)
-	OnAnswer_               func(conn *MockWebRtcConnection, sdp string) error
-	OnOffer_                func(conn *MockWebRtcConnection, sdp string) (string, error)
-	OnIceCandidate_         func(conn *MockWebRtcConnection, sdp string) error
-	WriteReliable_          func(conn *MockWebRtcConnection, bytes []byte) error
-	WriteUnreliable_        func(conn *MockWebRtcConnection, bytes []byte) error
-	ReadReliable_           func(conn *MockWebRtcConnection, bytes []byte) (int, error)
-	ReadUnreliable_         func(conn *MockWebRtcConnection, bytes []byte) (int, error)
-	Close_                  func(conn *MockWebRtcConnection)
+type MockReadWriteCloser struct {
+	mock.Mock
 }
 
-func MakeMockWebRtcConnection() *MockWebRtcConnection {
-	return &MockWebRtcConnection{
-		Close_: func(conn *MockWebRtcConnection) {},
-	}
+func (m *MockReadWriteCloser) ReadDataChannel(p []byte) (int, bool, error) {
+	n, err := m.Read(p)
+	return n, false, err
 }
 
-func (conn *MockWebRtcConnection) OnReliableChannelOpen(l func()) {
-	conn.onUnreliableChannelOpen = l
+func (m *MockReadWriteCloser) WriteDataChannel(p []byte, isString bool) (int, error) {
+	return m.Write(p)
 }
 
-func (conn *MockWebRtcConnection) OnUnreliableChannelOpen(l func()) {
-	conn.onReliableChannelOpen = l
+func (m *MockReadWriteCloser) Read(p []byte) (n int, err error) {
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
 }
 
-func (conn *MockWebRtcConnection) CreateOffer() (string, error)       { return conn.CreateOffer_(conn) }
-func (conn *MockWebRtcConnection) OnAnswer(sdp string) error          { return conn.OnAnswer_(conn, sdp) }
-func (conn *MockWebRtcConnection) OnOffer(sdp string) (string, error) { return conn.OnOffer_(conn, sdp) }
-
-func (conn *MockWebRtcConnection) OnIceCandidate(sdp string) error {
-	return conn.OnIceCandidate_(conn, sdp)
+func (m *MockReadWriteCloser) Write(p []byte) (n int, err error) {
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
 }
 
-func (conn *MockWebRtcConnection) WriteReliable(bytes []byte) error {
-	return conn.WriteReliable_(conn, bytes)
+func (m *MockReadWriteCloser) Close() error {
+	args := m.Called()
+	return args.Error(0)
 }
-
-func (conn *MockWebRtcConnection) WriteUnreliable(bytes []byte) error {
-	return conn.WriteUnreliable_(conn, bytes)
-}
-
-func (conn *MockWebRtcConnection) ReadReliable(bytes []byte) (int, error) {
-	return conn.ReadReliable_(conn, bytes)
-}
-
-func (conn *MockWebRtcConnection) ReadUnreliable(bytes []byte) (int, error) {
-	return conn.ReadUnreliable_(conn, bytes)
-}
-
-func (conn *MockWebRtcConnection) Close() { conn.Close_(conn) }
 
 type MockWebRtc struct {
-	NewConnection_ func(*MockWebRtc) (webrtc.IWebRtcConnection, error)
+	mock.Mock
 }
 
-func (w *MockWebRtc) NewConnection() (webrtc.IWebRtcConnection, error) {
-	return w.NewConnection_(w)
+func (m *MockWebRtc) NewConnection(peerAlias uint64) (*webrtc.PeerConnection, error) {
+	args := m.Called(peerAlias)
+	return args.Get(0).(*webrtc.PeerConnection), args.Error(1)
+}
+
+func (m *MockWebRtc) CreateReliableDataChannel(conn *webrtc.PeerConnection) (*webrtc.DataChannel, error) {
+	args := m.Called(conn)
+	return args.Get(0).(*webrtc.DataChannel), args.Error(1)
+}
+
+func (m *MockWebRtc) Detach(dc *webrtc.DataChannel) (webrtc.ReadWriteCloser, error) {
+	args := m.Called(dc)
+	return args.Get(0).(webrtc.ReadWriteCloser), args.Error(1)
+}
+
+func (m *MockWebRtc) CreateUnreliableDataChannel(conn *webrtc.PeerConnection) (*webrtc.DataChannel, error) {
+	args := m.Called(conn)
+	return args.Get(0).(*webrtc.DataChannel), args.Error(1)
+}
+
+func (m *MockWebRtc) RegisterOpenHandler(dc *webrtc.DataChannel, handler func()) {
+	m.Called(dc, handler)
+}
+
+func (m *MockWebRtc) InvokeOpenHandler(dc *webrtc.DataChannel) {
+	m.Called(dc)
+}
+
+func (m *MockWebRtc) CreateOffer(conn *webrtc.PeerConnection) (string, error) {
+	args := m.Called(conn)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockWebRtc) OnAnswer(conn *webrtc.PeerConnection, sdp string) error {
+	args := m.Called(conn, sdp)
+	return args.Error(0)
+}
+
+func (m *MockWebRtc) OnOffer(conn *webrtc.PeerConnection, sdp string) (string, error) {
+	args := m.Called(conn, sdp)
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockWebRtc) OnIceCandidate(conn *webrtc.PeerConnection, sdp string) error {
+	args := m.Called(conn, sdp)
+	return args.Error(0)
+}
+
+func (m *MockWebRtc) IsClosed(conn *webrtc.PeerConnection) bool {
+	args := m.Called(conn)
+	return args.Bool(0)
+}
+
+func (m *MockWebRtc) IsNew(conn *webrtc.PeerConnection) bool {
+	args := m.Called(conn)
+	return args.Bool(0)
+}
+
+func (m *MockWebRtc) Close(conn *webrtc.PeerConnection) error {
+	args := m.Called(conn)
+	return args.Error(0)
 }

@@ -1,4 +1,5 @@
 PROTOC ?= protoc
+DEBUG_FLAGS = -gcflags="all=-N -l"
 
 build:
 	go build -o build/simulation ./cmd/simulation
@@ -16,6 +17,9 @@ test: build
 	go test -race $(TEST_FLAGS) \
 github.com/decentraland/communications-server-go/internal/worldcomm \
 github.com/decentraland/communications-server-go/internal/coordinator
+
+bench: build
+	go test -bench=. -run="NOTHING" github.com/decentraland/communications-server-go/internal/worldcomm
 
 cover: TEST_FLAGS=-coverprofile=coverage.out
 cover: test

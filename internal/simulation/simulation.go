@@ -141,7 +141,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 					return
 				}
 
-				if err := proto.Unmarshal(rawMsg, &dataHeader); err != nil {
+				if err := proto.Unmarshal(dataMessage.Body, &dataHeader); err != nil {
 					log.Println("error unmarshalling data header")
 					return
 				}
@@ -197,7 +197,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 
 	log.Println("my alias is", worldData.MyAlias)
 
-	if err := client.connect(worldData.AvailableServers[0]); err != nil {
+	if err := client.connect(worldData.MyAlias, worldData.AvailableServers[0]); err != nil {
 		log.Fatal(err)
 	}
 
@@ -307,6 +307,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 			if err != nil {
 				log.Fatal("encode position failed", err)
 			}
+
 			client.sendUnreliable <- bytes
 			lastPositionMsg = time.Now()
 		}

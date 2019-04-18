@@ -9,8 +9,10 @@ import (
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
-	"github.com/pions/datachannel"
-	"github.com/pions/webrtc"
+	"github.com/pion/datachannel"
+	pionlogging "github.com/pion/logging"
+	"github.com/pion/webrtc/v2"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -169,6 +171,7 @@ func (client *Client) startCoordination() error {
 	client.coordinator = c
 	defer c.Close()
 
+	header := protocol.CoordinatorMessage{}
 	for {
 		_, bytes, err := c.ReadMessage()
 		if err != nil {
@@ -176,8 +179,7 @@ func (client *Client) startCoordination() error {
 			return err
 		}
 
-		header := &protocol.CoordinatorMessage{}
-		if err := proto.Unmarshal(bytes, header); err != nil {
+		if err := proto.Unmarshal(bytes, &header); err != nil {
 			log.Println("Failed to load:", err)
 			continue
 		}
@@ -186,8 +188,8 @@ func (client *Client) startCoordination() error {
 
 		switch msgType {
 		case protocol.MessageType_WELCOME:
-			welcomeMessage := &protocol.WelcomeMessage{}
-			if err := proto.Unmarshal(bytes, welcomeMessage); err != nil {
+			welcomeMessage := protocol.WelcomeMessage{}
+			if err := proto.Unmarshal(bytes, &welcomeMessage); err != nil {
 				log.Fatal("Failed to decode welcome message:", err)
 			}
 
@@ -241,11 +243,50 @@ func (client *Client) startCoordination() error {
 	}
 }
 
-func (client *Client) connect(serverAlias uint64) error {
+type LogrusLevelLogger struct {
+	log       *logrus.Logger
+	peerAlias uint64
+}
+
+func (lll *LogrusLevelLogger) Trace(msg string) { lll.log.WithField("peer", lll.peerAlias).Trace(msg) }
+func (lll *LogrusLevelLogger) Error(msg string) { lll.log.WithField("peer", lll.peerAlias).Error(msg) }
+func (lll *LogrusLevelLogger) Debug(msg string) { lll.log.WithField("peer", lll.peerAlias).Debug(msg) }
+func (lll *LogrusLevelLogger) Info(msg string)  { lll.log.WithField("peer", lll.peerAlias).Info(msg) }
+func (lll *LogrusLevelLogger) Warn(msg string)  { lll.log.WithField("peer", lll.peerAlias).Warn(msg) }
+
+func (lll *LogrusLevelLogger) Tracef(format string, args ...interface{}) {
+	lll.log.WithField("peer", lll.peerAlias).Tracef(format, args...)
+}
+func (lll *LogrusLevelLogger) Debugf(format string, args ...interface{}) {
+	lll.log.WithField("peer", lll.peerAlias).Debugf(format, args...)
+}
+func (lll *LogrusLevelLogger) Infof(format string, args ...interface{}) {
+	lll.log.WithField("peer", lll.peerAlias).Infof(format, args...)
+}
+func (lll *LogrusLevelLogger) Warnf(format string, args ...interface{}) {
+	lll.log.WithField("peer", lll.peerAlias).Warnf(format, args...)
+}
+func (lll *LogrusLevelLogger) Errorf(format string, args ...interface{}) {
+	lll.log.WithField("peer", lll.peerAlias).Errorf(format, args...)
+}
+
+type PionSimulationLoggingFactory struct {
+	PeerAlias uint64
+}
+
+func (f *PionSimulationLoggingFactory) NewLogger(scope string) pionlogging.LeveledLogger {
+	log := logrus.New()
+	log.SetLevel(logrus.ErrorLevel)
+	return &LogrusLevelLogger{log: log, peerAlias: f.PeerAlias}
+}
+
+func (client *Client) connect(alias uint64, serverAlias uint64) error {
 	log.Println("client connect()")
 
 	s := webrtc.SettingEngine{}
 	s.DetachDataChannels()
+	s.LoggerFactory = &PionSimulationLoggingFactory{PeerAlias: alias}
+
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(s))
 
 	conn, err := api.NewPeerConnection(webRtcConfig)
@@ -271,7 +312,7 @@ func (client *Client) connect(serverAlias uint64) error {
 
 	conn.OnDataChannel(func(d *webrtc.DataChannel) {
 
-		readPump := func(client *Client, c *datachannel.DataChannel, reliable bool) {
+		readPump := func(client *Client, c datachannel.Reader, reliable bool) {
 			var received chan ReceivedMessage
 
 			if reliable {
@@ -280,9 +321,10 @@ func (client *Client) connect(serverAlias uint64) error {
 				received = client.receivedUnreliable
 			}
 
+			header := protocol.WorldCommMessage{}
+			buffer := make([]byte, 1024)
 			for {
-				buffer := make([]byte, 1024)
-				n, err := c.Read(buffer)
+				n, _, err := c.ReadDataChannel(buffer)
 				if err != nil {
 					log.Println("stop readPump, datachannel closed", reliable)
 					return
@@ -293,9 +335,10 @@ func (client *Client) connect(serverAlias uint64) error {
 					continue
 				}
 
-				bytes := buffer[:n]
-				header := &protocol.WorldCommMessage{}
-				if err := proto.Unmarshal(bytes, header); err != nil {
+				bytes := make([]byte, n)
+				copy(bytes, buffer[:n])
+
+				if err := proto.Unmarshal(bytes, &header); err != nil {
 					log.Println("Failed to load:", err)
 					continue
 				}
@@ -306,14 +349,14 @@ func (client *Client) connect(serverAlias uint64) error {
 			}
 		}
 
-		writePump := func(client *Client, c *datachannel.DataChannel, reliable bool) {
+		writePump := func(client *Client, c datachannel.Writer, reliable bool) {
 			var messagesQueue chan []byte
 			var stopQueue chan bool
 			if reliable {
 				stopQueue = client.stopReliableQueue
 				messagesQueue = client.sendReliable
 				bytes := <-client.authMessage
-				_, err := c.Write(bytes)
+				_, err := c.WriteDataChannel(bytes, false)
 				if err != nil {
 					log.Println("error writting auth message", err)
 					return
@@ -330,7 +373,7 @@ func (client *Client) connect(serverAlias uint64) error {
 						return
 					}
 
-					_, err := c.Write(bytes)
+					_, err := c.WriteDataChannel(bytes, false)
 					if err != nil {
 						log.Println("error writting", err)
 						return
@@ -339,7 +382,7 @@ func (client *Client) connect(serverAlias uint64) error {
 					n := len(messagesQueue)
 					for i := 0; i < n; i++ {
 						bytes = <-messagesQueue
-						_, err := c.Write(bytes)
+						_, err := c.WriteDataChannel(bytes, false)
 						if err != nil {
 							log.Println("error writting", err)
 							return

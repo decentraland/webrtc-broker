@@ -1,273 +1,154 @@
 package webrtc
 
 import (
-	"errors"
-	"time"
+	"github.com/decentraland/communications-server-go/internal/logging"
 
-	"github.com/pions/datachannel"
-	pions "github.com/pions/webrtc"
+	pion "github.com/pion/webrtc/v2"
 	log "github.com/sirupsen/logrus"
+
+	"github.com/pion/datachannel"
 )
 
-type IWebRtcConnection interface {
-	OnReliableChannelOpen(func())
-	OnUnreliableChannelOpen(func())
-	CreateOffer() (string, error)
-	OnAnswer(sdp string) error
-	OnOffer(sdp string) (string, error)
-	OnIceCandidate(sdp string) error
-	WriteReliable(bytes []byte) error
-	WriteUnreliable(bytes []byte) error
-	ReadReliable(bytes []byte) (int, error)
-	ReadUnreliable(bytes []byte) (int, error)
-	Close()
-}
+type OfferOptions = pion.OfferOptions
+type PeerConnection = pion.PeerConnection
+type DataChannel = pion.DataChannel
+type ReadWriteCloser = datachannel.ReadWriteCloser
 
-type webRtcConnection struct {
-	onUnreliableChannelOpen func()
-	onReliableChannelOpen   func()
-	conn                    *pions.PeerConnection
-	reliableDataChannel     *datachannel.DataChannel
-	unreliableDataChannel   *datachannel.DataChannel
-	createdAt               time.Time
-}
-
-var config = pions.Configuration{
-	ICEServers: []pions.ICEServer{
+var config = pion.Configuration{
+	ICEServers: []pion.ICEServer{
 		{
 			URLs: []string{"stun:stun.l.google.com:19302"},
 		},
 	},
 }
 
-func openUnreliableDataChannel(conn *webRtcConnection) error {
+type IWebRtc interface {
+	NewConnection(peerAlias uint64) (*PeerConnection, error)
+	CreateReliableDataChannel(conn *PeerConnection) (*DataChannel, error)
+	CreateUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error)
+	RegisterOpenHandler(*DataChannel, func())
+	Detach(*DataChannel) (ReadWriteCloser, error)
+	CreateOffer(conn *PeerConnection) (string, error)
+	OnAnswer(conn *PeerConnection, sdp string) error
+	OnOffer(conn *PeerConnection, sdp string) (string, error)
+	OnIceCandidate(conn *PeerConnection, sdp string) error
+	IsClosed(conn *PeerConnection) bool
+	IsNew(conn *PeerConnection) bool
+	Close(conn *PeerConnection) error
+}
+
+type WebRtc struct{}
+
+func MakeWebRtc() *WebRtc {
+	return &WebRtc{}
+}
+
+func (w *WebRtc) NewConnection(peerAlias uint64) (*PeerConnection, error) {
+	s := pion.SettingEngine{}
+
+	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: peerAlias}
+	s.DetachDataChannels()
+
+	api := pion.NewAPI(pion.WithSettingEngine(s))
+
+	conn, err := api.NewPeerConnection(config)
+	if err != nil {
+		log.WithError(err).Error("cannot create a new webrtc connection")
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+func (w *WebRtc) IsClosed(conn *PeerConnection) bool {
+	return conn.ConnectionState() == pion.PeerConnectionStateClosed
+}
+
+func (w *WebRtc) IsNew(conn *PeerConnection) bool {
+	return conn.ICEConnectionState() == pion.ICEConnectionStateNew || conn.ICEConnectionState() == pion.ICEConnectionStateChecking
+}
+
+func (w *WebRtc) Close(conn *PeerConnection) error {
+	return conn.Close()
+}
+
+func (w *WebRtc) CreateReliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
+	return conn.CreateDataChannel("reliable", nil)
+}
+
+func (w *WebRtc) CreateUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
 	var maxRetransmits uint16 = 0
 	var ordered bool = false
-	options := &pions.DataChannelInit{
+	options := &pion.DataChannelInit{
 		MaxRetransmits: &maxRetransmits,
 		Ordered:        &ordered,
 	}
-	c, err := conn.conn.CreateDataChannel("unreliable", options)
 
+	return conn.CreateDataChannel("unreliable", options)
+}
+
+func (w *WebRtc) RegisterOpenHandler(dc *DataChannel, handler func()) {
+	dc.OnOpen(handler)
+}
+
+func (w *WebRtc) Detach(dc *DataChannel) (ReadWriteCloser, error) {
+	return dc.Detach()
+}
+
+func (w *WebRtc) CreateOffer(conn *PeerConnection) (string, error) {
+	offer, err := conn.CreateOffer(nil)
 	if err != nil {
-		log.WithField("error", err).Error("cannot create new unreliable data channel")
-		return err
-	}
-
-	c.OnOpen(func() {
-		log.WithFields(log.Fields{
-			"channel_label": c.Label(),
-			"channel_id":    *c.ID(),
-			"log_type":      "webrtc",
-		}).Info("Unreliable data channel open")
-		d, err := c.Detach()
-		if err != nil {
-			log.WithField("error", err).Error("cannot detach data channel")
-			return
-		}
-		conn.unreliableDataChannel = d
-		conn.onUnreliableChannelOpen()
-	})
-
-	return nil
-}
-
-func openReliableDataChannel(conn *webRtcConnection) error {
-	c, err := conn.conn.CreateDataChannel("reliable", nil)
-	if err != nil {
-		log.WithField("error", err).Error("cannot create new reliable data channel")
-		return err
-	}
-
-	c.OnOpen(func() {
-		log.WithFields(log.Fields{
-			"channel_label": c.Label(),
-			"channel_id":    *c.ID(),
-			"log_type":      "webrtc",
-		}).Info("Reliable data channel open")
-		d, err := c.Detach()
-		if err != nil {
-			log.WithField("error", err).Error("cannot detach data channel")
-			return
-		}
-		conn.reliableDataChannel = d
-		conn.onReliableChannelOpen()
-	})
-
-	return nil
-}
-
-func (conn *webRtcConnection) OnReliableChannelOpen(l func()) {
-	conn.onReliableChannelOpen = l
-}
-
-func (conn *webRtcConnection) OnUnreliableChannelOpen(l func()) {
-	conn.onUnreliableChannelOpen = l
-}
-
-func (conn *webRtcConnection) CreateOffer() (string, error) {
-	offer, err := conn.conn.CreateOffer(nil)
-	if err != nil {
-		log.WithError(err).Error("error creating webrtc offer")
 		return "", err
 	}
 
-	err = conn.conn.SetLocalDescription(offer)
+	err = conn.SetLocalDescription(offer)
 	if err != nil {
-		log.WithError(err).Error("error setting local description, on create offer")
 		return "", err
 	}
 
 	return offer.SDP, nil
 }
 
-func (conn *webRtcConnection) OnAnswer(sdp string) error {
-	answer := pions.SessionDescription{
-		Type: pions.SDPTypeAnswer,
+func (w *WebRtc) OnAnswer(conn *PeerConnection, sdp string) error {
+	answer := pion.SessionDescription{
+		Type: pion.SDPTypeAnswer,
 		SDP:  sdp,
 	}
 
-	if err := conn.conn.SetRemoteDescription(answer); err != nil {
-		log.WithError(err).Error("error setting remote description (on answer)")
+	if err := conn.SetRemoteDescription(answer); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (conn *webRtcConnection) OnOffer(sdp string) (string, error) {
-	offer := pions.SessionDescription{
-		Type: pions.SDPTypeOffer,
+func (w *WebRtc) OnOffer(conn *PeerConnection, sdp string) (string, error) {
+	offer := pion.SessionDescription{
+		Type: pion.SDPTypeOffer,
 		SDP:  sdp,
 	}
 
-	if err := conn.conn.SetRemoteDescription(offer); err != nil {
-		log.WithError(err).Error("error setting remote description (on offer)")
+	if err := conn.SetRemoteDescription(offer); err != nil {
 		return "", err
 	}
 
-	answer, err := conn.conn.CreateAnswer(nil)
+	answer, err := conn.CreateAnswer(nil)
 	if err != nil {
-		log.WithError(err).Error("error creating webrtc answer")
 		return "", err
 	}
 
-	err = conn.conn.SetLocalDescription(answer)
+	err = conn.SetLocalDescription(answer)
 	if err != nil {
-		log.WithError(err).Error("error setting local description, on OnOffer")
 		return "", err
 	}
 
 	return answer.SDP, nil
 }
 
-func (conn *webRtcConnection) OnIceCandidate(sdp string) error {
-	if err := conn.conn.AddICECandidate(pions.ICECandidateInit{Candidate: sdp}); err != nil {
-		log.WithError(err).Error("error adding ice candidate")
+func (w *WebRtc) OnIceCandidate(conn *PeerConnection, sdp string) error {
+	if err := conn.AddICECandidate(pion.ICECandidateInit{Candidate: sdp}); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func (conn *webRtcConnection) write(channel *datachannel.DataChannel, bytes []byte) error {
-	if channel == nil {
-		log.Debug("data channel is not open yet (nil)")
-		return errors.New("data channal is yet not open")
-	}
-
-	_, err := channel.Write(bytes)
-	if err != nil {
-		log.WithField("error", err).Error("error writing to data channel")
-		return err
-	}
-
-	return nil
-}
-
-func (conn *webRtcConnection) WriteReliable(bytes []byte) error {
-	return conn.write(conn.reliableDataChannel, bytes)
-}
-
-func (conn *webRtcConnection) WriteUnreliable(bytes []byte) error {
-	return conn.write(conn.unreliableDataChannel, bytes)
-}
-
-func (conn *webRtcConnection) ReadReliable(bytes []byte) (int, error) {
-	if conn.reliableDataChannel != nil {
-		return conn.reliableDataChannel.Read(bytes)
-	}
-	return 0, nil
-}
-
-func (conn *webRtcConnection) ReadUnreliable(bytes []byte) (int, error) {
-	if conn.unreliableDataChannel != nil {
-		return conn.unreliableDataChannel.Read(bytes)
-	}
-	return 0, nil
-}
-
-func (conn *webRtcConnection) Close() {
-	if conn.reliableDataChannel != nil {
-		if err := conn.reliableDataChannel.Close(); err != nil {
-			log.WithError(err).Debug("error closing reliable data channel")
-		}
-	}
-
-	if conn.unreliableDataChannel != nil {
-		if err := conn.unreliableDataChannel.Close(); err != nil {
-			log.WithError(err).Debug("error closing unreliable data channel")
-		}
-	}
-
-	if err := conn.conn.Close(); err != nil {
-		// NOTE: this is not really an error, since it will fail if the connection is already dropped
-		log.WithError(err).Debug("error closing webrtc connection")
-	}
-}
-
-type IWebRtc interface {
-	NewConnection() (IWebRtcConnection, error)
-}
-
-type WebRtc struct {
-	api *pions.API
-}
-
-func MakeWebRtc() *WebRtc {
-	s := pions.SettingEngine{}
-	s.DetachDataChannels()
-
-	api := pions.NewAPI(pions.WithSettingEngine(s))
-	return &WebRtc{api: api}
-}
-
-func (w *WebRtc) NewConnection() (IWebRtcConnection, error) {
-	conn, err := w.api.NewPeerConnection(config)
-	if err != nil {
-		log.WithError(err).Error("cannot create a new webrtc connection")
-		return nil, err
-	}
-
-	connection := &webRtcConnection{conn: conn, createdAt: time.Now()}
-
-	if err := openReliableDataChannel(connection); err != nil {
-		return nil, err
-	}
-
-	if err := openUnreliableDataChannel(connection); err != nil {
-		return nil, err
-	}
-
-	conn.OnICEConnectionStateChange(func(connectionState pions.ICEConnectionState) {
-		log.
-			WithField("iceConnectionState", connectionState.String()).
-			Debugf("ICE Connection State has changed: %s", connectionState.String())
-		if connectionState == pions.ICEConnectionStateDisconnected {
-			log.Debug("Connection state is disconnected, close connection")
-			conn.Close()
-		}
-	})
-
-	return connection, nil
 }
