@@ -7,7 +7,7 @@ require (
 	github.com/newrelic/go-agent v2.4.0+incompatible
 	github.com/pion/datachannel v1.3.0
 	github.com/pion/logging v0.2.1
-	github.com/pion/webrtc/v2 v2.0.8-0.20190418050529-0c5f0e088bb1
+	github.com/pion/webrtc/v2 v2.0.8
 	github.com/segmentio/ksuid v1.0.2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
