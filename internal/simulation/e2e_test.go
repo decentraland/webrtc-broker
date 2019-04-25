@@ -197,6 +197,7 @@ func startCommServer(t *testing.T, discoveryUrl string) *testReporter {
 	t.Log("starting communication server node", discoveryUrl)
 
 	require.NoError(t, worldcomm.ConnectCoordinator(&ws))
+	go worldcomm.ProcessMessagesQueue(&ws)
 	go worldcomm.Process(&ws)
 	return reporter
 }

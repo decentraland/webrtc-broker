@@ -5,9 +5,10 @@ require (
 	github.com/gorilla/websocket v1.4.0
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/newrelic/go-agent v2.4.0+incompatible
-	github.com/pion/datachannel v1.3.0
+	github.com/pion/datachannel v1.4.0
+	github.com/pion/ice v0.2.2-0.20190415223710-7fa75afc594b // indirect
 	github.com/pion/logging v0.2.1
-	github.com/pion/webrtc/v2 v2.0.8
+	github.com/pion/webrtc/v2 v2.0.7
 	github.com/segmentio/ksuid v1.0.2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
