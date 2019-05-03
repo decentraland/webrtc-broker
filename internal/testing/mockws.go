@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/ws"
+	"github.com/decentraland/webrtc-broker/internal/ws"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/mock"
 )

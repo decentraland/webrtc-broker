@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
 
 var UnsupportedAuthMethod = errors.New("Unsupported authentication method")

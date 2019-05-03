@@ -8,9 +8,9 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/utils"
-	"github.com/decentraland/communications-server-go/pkg/authentication"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/decentraland/webrtc-broker/internal/utils"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/segmentio/ksuid"
 )

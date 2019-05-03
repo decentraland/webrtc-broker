@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/logging"
-	"github.com/decentraland/communications-server-go/internal/ws"
-	"github.com/decentraland/communications-server-go/pkg/authentication"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/decentraland/webrtc-broker/internal/logging"
+	"github.com/decentraland/webrtc-broker/internal/ws"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
 
 const (

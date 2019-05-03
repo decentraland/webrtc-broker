@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/decentraland/communications-server-go/internal/logging"
-	"github.com/decentraland/communications-server-go/pkg/authentication"
-	"github.com/decentraland/communications-server-go/pkg/commserver"
+	"github.com/decentraland/webrtc-broker/internal/logging"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	"github.com/sirupsen/logrus"
 
 	_ "net/http/pprof"

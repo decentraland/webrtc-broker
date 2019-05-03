@@ -1,4 +1,4 @@
-module github.com/decentraland/communications-server-go
+module github.com/decentraland/webrtc-broker
 
 require (
 	github.com/golang/protobuf v1.3.0

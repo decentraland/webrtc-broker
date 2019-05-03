@@ -8,9 +8,9 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	_testing "github.com/decentraland/communications-server-go/internal/testing"
-	"github.com/decentraland/communications-server-go/pkg/authentication"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	_testing "github.com/decentraland/webrtc-broker/internal/testing"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
 )

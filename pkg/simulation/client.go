@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/utils"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/decentraland/webrtc-broker/internal/utils"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/pion/datachannel"

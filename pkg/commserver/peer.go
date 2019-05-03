@@ -3,9 +3,9 @@ package commserver
 import (
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/logging"
-	"github.com/decentraland/communications-server-go/internal/webrtc"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/decentraland/webrtc-broker/internal/logging"
+	"github.com/decentraland/webrtc-broker/internal/webrtc"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
 
 type peer struct {

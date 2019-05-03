@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/logging"
-	"github.com/decentraland/communications-server-go/internal/utils"
-	"github.com/decentraland/communications-server-go/internal/webrtc"
-	"github.com/decentraland/communications-server-go/pkg/authentication"
-	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/decentraland/webrtc-broker/internal/logging"
+	"github.com/decentraland/webrtc-broker/internal/utils"
+	"github.com/decentraland/webrtc-broker/internal/webrtc"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/sirupsen/logrus"
 
 	pion "github.com/pion/webrtc/v2"

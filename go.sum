@@ -38,10 +38,6 @@ github.com/pion/datachannel v1.4.0/go.mod h1:FEAjrtIFsfajISB10H0prZmqoPulsYTqGCm
 github.com/pion/dtls v1.3.3 h1:g6CLJfTEOt0fcLZFNxIOy0sbz1sLsA0XpIFgHrWGi0A=
 github.com/pion/dtls v1.3.3/go.mod h1:CjlPLfQdsTg3G4AEXjJp8FY5bRweBlxHrgoFrN+fQsk=
 github.com/pion/ice v0.2.1/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
-github.com/pion/ice v0.2.2-0.20190415223710-7fa75afc594b h1:jxuUVkFK8QQJRao5EeT+F2e3s/3wcDhQ1iUDWUqRHfU=
-github.com/pion/ice v0.2.2-0.20190415223710-7fa75afc594b/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
-github.com/pion/ice v0.2.6-0.20190503123350-134c0a580bf5 h1:Ir4QR3DHYmpHJYywe2u7OgLTV2GY8Z29wRRU0NOcShU=
-github.com/pion/ice v0.2.6-0.20190503123350-134c0a580bf5/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
 github.com/pion/ice v0.2.6-0.20190503134358-3595da5d93be h1:0zWj8aBpoJwnyVUCLXSQ3bkXzQo/8uHt/Om54v4RQPM=
 github.com/pion/ice v0.2.6-0.20190503134358-3595da5d93be/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
 github.com/pion/logging v0.2.1-0.20190404202522-3c79a8accd0a/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=

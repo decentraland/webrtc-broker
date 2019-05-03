@@ -1,7 +1,7 @@
 package webrtc
 
 import (
-	"github.com/decentraland/communications-server-go/internal/logging"
+	"github.com/decentraland/webrtc-broker/internal/logging"
 
 	pion "github.com/pion/webrtc/v2"
 

@@ -1,7 +1,7 @@
 package testing
 
 import (
-	"github.com/decentraland/communications-server-go/internal/webrtc"
+	"github.com/decentraland/webrtc-broker/internal/webrtc"
 	"github.com/stretchr/testify/mock"
 )
 
