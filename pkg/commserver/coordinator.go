@@ -1,4 +1,4 @@
-package worldcomm
+package commserver
 
 import (
 	"time"
@@ -15,22 +15,14 @@ const (
 	maxCoordinatorMessageSize = 5000 // NOTE let's adjust this later
 )
 
-type Coordinator struct {
+type coordinator struct {
 	log  *logging.Logger
 	url  string
 	conn ws.IWebsocket
 	send chan []byte
 }
 
-func makeCoordinator(url string) *Coordinator {
-	return &Coordinator{
-		log:  logging.New(),
-		url:  url,
-		send: make(chan []byte, 256),
-	}
-}
-
-func (c *Coordinator) Connect(state *WorldCommunicationState, authMethod string) error {
+func (c *coordinator) Connect(state *State, authMethod string) error {
 	url, err := state.services.Auth.GenerateAuthURL(authMethod, c.url, protocol.Role_COMMUNICATION_SERVER)
 
 	if err != nil {
@@ -53,7 +45,7 @@ func (c *Coordinator) Connect(state *WorldCommunicationState, authMethod string)
 	return nil
 }
 
-func (c *Coordinator) Send(state *WorldCommunicationState, msg protocol.Message) error {
+func (c *coordinator) Send(state *State, msg protocol.Message) error {
 	log := c.log
 	bytes, err := state.services.Marshaller.Marshal(msg)
 	if err != nil {
@@ -61,12 +53,11 @@ func (c *Coordinator) Send(state *WorldCommunicationState, msg protocol.Message)
 		return err
 	}
 
-	state.services.Agent.RecordSentToCoordinatorSize(len(bytes))
 	c.send <- bytes
 	return nil
 }
 
-func (c *Coordinator) readPump(state *WorldCommunicationState, welcomeChannel chan *protocol.WelcomeMessage) {
+func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.WelcomeMessage) {
 	defer func() {
 		c.Close()
 		state.stop <- true
@@ -93,7 +84,6 @@ func (c *Coordinator) readPump(state *WorldCommunicationState, welcomeChannel ch
 			break
 		}
 
-		state.services.Agent.RecordReceivedFromCoordinatorSize(len(bytes))
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithError(err).Debug("decode header failure")
 			continue
@@ -132,7 +122,7 @@ func (c *Coordinator) readPump(state *WorldCommunicationState, welcomeChannel ch
 	}
 }
 
-func (c *Coordinator) writePump(state *WorldCommunicationState) {
+func (c *coordinator) writePump(state *State) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -172,7 +162,7 @@ func (c *Coordinator) writePump(state *WorldCommunicationState) {
 	}
 }
 
-func (c *Coordinator) Close() {
+func (c *coordinator) Close() {
 	if c.conn != nil {
 		c.conn.Close()
 	}

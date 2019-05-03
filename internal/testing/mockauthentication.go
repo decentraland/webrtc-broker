@@ -10,7 +10,7 @@ type MockAuthenticator struct {
 	Authenticate_        func(role protocol.Role, bytes []byte) (bool, error)
 	AuthenticateQs_      func(role protocol.Role, qs url.Values) (bool, error)
 	GenerateAuthMessage_ func(role protocol.Role) (*protocol.AuthMessage, error)
-	GenerateAuthURL_     func(baseUrl string, role protocol.Role) (string, error)
+	GenerateAuthURL_     func(baseURL string, role protocol.Role) (string, error)
 }
 
 func (a *MockAuthenticator) Authenticate(role protocol.Role, bytes []byte) (bool, error) {
@@ -25,8 +25,8 @@ func (a *MockAuthenticator) GenerateAuthMessage(role protocol.Role) (*protocol.A
 	return a.GenerateAuthMessage_(role)
 }
 
-func (a *MockAuthenticator) GenerateAuthURL(baseUrl string, role protocol.Role) (string, error) {
-	return a.GenerateAuthURL_(baseUrl, role)
+func (a *MockAuthenticator) GenerateAuthURL(baseURL string, role protocol.Role) (string, error) {
+	return a.GenerateAuthURL_(baseURL, role)
 }
 
 func MakeWithAuthResponse(isValid bool) *MockAuthenticator {

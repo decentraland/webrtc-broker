@@ -8,14 +8,17 @@ import (
 
 	"github.com/decentraland/communications-server-go/internal/ws"
 	"github.com/golang/protobuf/proto"
+	"github.com/stretchr/testify/mock"
 )
 
+// MokcUpgrader mocks socket upgrade interface
 type MockUpgrader struct {
-	Upgrade_ func(w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error)
+	mock.Mock
 }
 
 func (m *MockUpgrader) Upgrade(w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-	return m.Upgrade_(w, r)
+	args := m.Called(w, r)
+	return args.Get(0).(ws.IWebsocket), args.Error(1)
 }
 
 type MockWebsocket struct {

@@ -1,4 +1,4 @@
-package worldcomm
+package commserver
 
 import (
 	"bytes"
@@ -7,11 +7,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/logging"
 	"github.com/decentraland/communications-server-go/internal/utils"
 	"github.com/decentraland/communications-server-go/internal/webrtc"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
+	"github.com/sirupsen/logrus"
 
 	pion "github.com/pion/webrtc/v2"
 )
@@ -142,20 +143,20 @@ func findPeer(peers []*peer, alias uint64) *peer {
 	return nil
 }
 
-type Services struct {
+type services struct {
 	Auth       authentication.Authentication
-	Marshaller protocol.IMarshaller
 	Log        *logging.Logger
-	Agent      *WorldCommAgent
+	Marshaller protocol.IMarshaller
 	WebRtc     webrtc.IWebRtc
 	Zipper     utils.ZipCompression
 }
 
-type WorldCommunicationState struct {
-	reporter                IReporter
-	services                Services
+// State is the commm server state
+type State struct {
+	reporter                func(state *State)
+	services                services
 	authMethod              string
-	coordinator             *Coordinator
+	coordinator             *coordinator
 	Peers                   []*peer
 	topicQueue              chan topicChange
 	connectQueue            chan uint64
@@ -173,18 +174,8 @@ type WorldCommunicationState struct {
 	subscriptionsLock sync.RWMutex
 }
 
-type IReporter interface {
-	Report(state *WorldCommunicationState)
-}
-
-type defaultReporter struct{}
-
-func (r *defaultReporter) Report(state *WorldCommunicationState) {
+func report(state *State) {
 	peersCount := len(state.Peers)
-	agent := state.services.Agent
-	agent.RecordTotalPeerConnections(peersCount)
-	agent.RecordTotalTopicSubscriptions(peersCount)
-	agent.RecordQueues(state)
 
 	state.subscriptionsLock.RLock()
 	state.services.Log.WithFields(logging.Fields{
@@ -195,16 +186,26 @@ func (r *defaultReporter) Report(state *WorldCommunicationState) {
 	state.subscriptionsLock.RUnlock()
 }
 
+// ICEServer represents a ICEServer config
+type ICEServer = webrtc.ICEServer
+
+// Config represents the communication server state
 type Config struct {
 	AuthMethod              string
-	CoordinatorUrl          string
-	Services                Services
+	CoordinatorURL          string
+	Auth                    authentication.Authentication
+	Log                     *logging.Logger
+	Marshaller              protocol.IMarshaller
+	WebRtc                  webrtc.IWebRtc
+	Zipper                  utils.ZipCompression
 	EstablishSessionTimeout time.Duration
 	ReportPeriod            time.Duration
-	Reporter                IReporter
+	Reporter                func(state *State)
+	ICEServers              []ICEServer
 }
 
-func MakeState(config Config) WorldCommunicationState {
+// MakeState creates a new communication server state
+func MakeState(config *Config) (*State, error) {
 	establishSessionTimeout := config.EstablishSessionTimeout
 	if establishSessionTimeout.Seconds() == 0 {
 		establishSessionTimeout = 1 * time.Minute
@@ -215,15 +216,42 @@ func MakeState(config Config) WorldCommunicationState {
 		reportPeriod = 30 * time.Second
 	}
 
-	reporter := config.Reporter
-	if reporter == nil {
-		reporter = &defaultReporter{}
+	if config.Reporter == nil {
+		config.Reporter = report
 	}
 
-	return WorldCommunicationState{
-		services:                config.Services,
-		authMethod:              config.AuthMethod,
-		coordinator:             makeCoordinator(config.CoordinatorUrl),
+	ss := services{
+		Auth:       config.Auth,
+		Log:        config.Log,
+		Marshaller: config.Marshaller,
+		WebRtc:     config.WebRtc,
+		Zipper:     config.Zipper,
+	}
+
+	if ss.Log == nil {
+		ss.Log = logrus.New()
+	}
+
+	if ss.Marshaller == nil {
+		ss.Marshaller = &protocol.Marshaller{}
+	}
+
+	if ss.WebRtc == nil {
+		ss.WebRtc = &webrtc.WebRtc{ICEServers: config.ICEServers}
+	}
+
+	if ss.Zipper == nil {
+		ss.Zipper = &utils.GzipCompression{}
+	}
+
+	state := &State{
+		services:   ss,
+		authMethod: config.AuthMethod,
+		coordinator: &coordinator{
+			log:  ss.Log,
+			url:  config.CoordinatorURL,
+			send: make(chan []byte, 256),
+		},
 		Peers:                   make([]*peer, 0),
 		subscriptions:           make(topicSubscriptions),
 		stop:                    make(chan bool),
@@ -232,13 +260,16 @@ func MakeState(config Config) WorldCommunicationState {
 		connectQueue:            make(chan uint64, 255),
 		messagesQueue:           make(chan *peerMessage, 255),
 		webRtcControlQueue:      make(chan *protocol.WebRtcMessage, 255),
-		reporter:                reporter,
+		reporter:                config.Reporter,
 		reportPeriod:            reportPeriod,
 		establishSessionTimeout: establishSessionTimeout,
 	}
+
+	return state, nil
 }
 
-func ConnectCoordinator(state *WorldCommunicationState) error {
+// ConnectCoordinator establish a connection with the coordinator
+func ConnectCoordinator(state *State) error {
 	c := state.coordinator
 	if err := c.Connect(state, state.authMethod); err != nil {
 		return err
@@ -268,7 +299,7 @@ func ConnectCoordinator(state *WorldCommunicationState) error {
 	return nil
 }
 
-func closeState(state *WorldCommunicationState) {
+func closeState(state *State) {
 	state.coordinator.Close()
 	close(state.webRtcControlQueue)
 	close(state.connectQueue)
@@ -278,7 +309,8 @@ func closeState(state *WorldCommunicationState) {
 	close(state.stop)
 }
 
-func ProcessMessagesQueue(state *WorldCommunicationState) {
+// ProcessMessagesQueue start the TOPIC message processor
+func ProcessMessagesQueue(state *State) {
 	log := state.services.Log
 	for {
 		select {
@@ -308,7 +340,8 @@ func ProcessMessagesQueue(state *WorldCommunicationState) {
 	}
 }
 
-func Process(state *WorldCommunicationState) {
+// Process start the peer processor
+func Process(state *State) {
 	log := state.services.Log
 
 	ticker := time.NewTicker(state.reportPeriod)
@@ -324,11 +357,11 @@ func Process(state *WorldCommunicationState) {
 				processConnect(state, alias)
 			}
 		case change := <-state.topicQueue:
-			ProcessSubscriptionChange(state, change)
+			processSubscriptionChange(state, change)
 			n := len(state.topicQueue)
 			for i := 0; i < n; i++ {
 				change := <-state.topicQueue
-				ProcessSubscriptionChange(state, change)
+				processSubscriptionChange(state, change)
 			}
 		case p := <-state.unregisterQueue:
 			processUnregister(state, p)
@@ -345,7 +378,7 @@ func Process(state *WorldCommunicationState) {
 				processWebRtcControlMessage(state, webRtcMessage)
 			}
 		case <-ticker.C:
-			state.reporter.Report(state)
+			state.reporter(state)
 		case <-state.stop:
 			log.Debug("hard stop signal")
 			return
@@ -361,7 +394,7 @@ func Process(state *WorldCommunicationState) {
 	}
 }
 
-func initPeer(state *WorldCommunicationState, alias uint64) (*peer, error) {
+func initPeer(state *State, alias uint64) (*peer, error) {
 	services := state.services
 	log := services.Log
 	establishSessionTimeout := state.establishSessionTimeout
@@ -457,7 +490,6 @@ func initPeer(state *WorldCommunicationState, alias uint64) (*peer, error) {
 			return
 		}
 
-		services.Agent.RecordReceivedReliableFromPeerSize(n)
 		rawMsg = buffer[:n]
 		if err := services.Marshaller.Unmarshal(rawMsg, &header); err != nil {
 			p.logError(err).Error("decode auth header message failure")
@@ -507,7 +539,7 @@ func initPeer(state *WorldCommunicationState, alias uint64) (*peer, error) {
 					if i != last {
 						buffer.WriteString(" ")
 					}
-					i += 1
+					i++
 				}
 				state.subscriptionsLock.Unlock()
 
@@ -572,7 +604,7 @@ func initPeer(state *WorldCommunicationState, alias uint64) (*peer, error) {
 	return p, nil
 }
 
-func processUnregister(state *WorldCommunicationState, p *peer) {
+func processUnregister(state *State, p *peer) {
 	if p.Index == -1 {
 		return
 	}
@@ -617,7 +649,7 @@ func processUnregister(state *WorldCommunicationState, p *peer) {
 	p.Index = -1
 }
 
-func processConnect(state *WorldCommunicationState, alias uint64) error {
+func processConnect(state *State, alias uint64) error {
 	log := state.services.Log
 
 	oldP := findPeer(state.Peers, alias)
@@ -644,7 +676,7 @@ func processConnect(state *WorldCommunicationState, alias uint64) error {
 	return nil
 }
 
-func ProcessSubscriptionChange(state *WorldCommunicationState, change topicChange) error {
+func processSubscriptionChange(state *State, change topicChange) error {
 	log := state.services.Log
 	p := change.peer
 
@@ -717,7 +749,7 @@ func ProcessSubscriptionChange(state *WorldCommunicationState, change topicChang
 	return nil
 }
 
-func processWebRtcControlMessage(state *WorldCommunicationState, webRtcMessage *protocol.WebRtcMessage) error {
+func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMessage) error {
 	log := state.services.Log
 
 	alias := webRtcMessage.FromAlias
@@ -763,9 +795,7 @@ func processWebRtcControlMessage(state *WorldCommunicationState, webRtcMessage *
 	return nil
 }
 
-func processTopicMessage(state *WorldCommunicationState, msg *peerMessage) {
-	agent := state.services.Agent
-
+func processTopicMessage(state *State, msg *peerMessage) {
 	topic := msg.topic
 	fromServer := msg.fromServer
 	reliable := msg.reliable
@@ -797,8 +827,6 @@ func processTopicMessage(state *WorldCommunicationState, msg *peerMessage) {
 		}
 	}
 
-	agent.RecordInflight(time.Since(msg.receivedAt))
-
 	if !fromServer && msg.rawMsgToServer != nil {
 		for _, p := range subscription.servers {
 			if p.IsClosed() {
@@ -820,7 +848,7 @@ func processTopicMessage(state *WorldCommunicationState, msg *peerMessage) {
 	}
 }
 
-func broadcastSubscriptionChange(state *WorldCommunicationState) error {
+func broadcastSubscriptionChange(state *State) error {
 	log := state.services.Log
 
 	state.subscriptionsLock.RLock()
@@ -832,7 +860,7 @@ func broadcastSubscriptionChange(state *WorldCommunicationState) error {
 		if i != last {
 			buffer.WriteString(" ")
 		}
-		i += 1
+		i++
 	}
 	state.subscriptionsLock.RUnlock()
 

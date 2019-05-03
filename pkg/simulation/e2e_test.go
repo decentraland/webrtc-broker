@@ -9,14 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/authentication"
-	"github.com/decentraland/communications-server-go/internal/webrtc"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
 
-	"github.com/decentraland/communications-server-go/internal/agent"
-	"github.com/decentraland/communications-server-go/internal/coordinator"
 	_testing "github.com/decentraland/communications-server-go/internal/testing"
 	"github.com/decentraland/communications-server-go/internal/utils"
-	"github.com/decentraland/communications-server-go/internal/worldcomm"
+	"github.com/decentraland/communications-server-go/pkg/commserver"
+	"github.com/decentraland/communications-server-go/pkg/coordinator"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
@@ -54,8 +52,8 @@ func (r *MockServerSelector) GetServerAliasList(forPeer *coordinator.Peer) []uin
 
 func makeTestAuthenticator() *MockAuthenticator {
 	auth := _testing.MakeWithAuthResponse(true)
-	auth.GenerateAuthURL_ = func(baseUrl string, role protocol.Role) (string, error) {
-		return fmt.Sprintf("%s?method=testAuth", baseUrl), nil
+	auth.GenerateAuthURL_ = func(baseURL string, role protocol.Role) (string, error) {
+		return fmt.Sprintf("%s?method=testAuth", baseURL), nil
 	}
 	auth.GenerateAuthMessage_ = func(role protocol.Role) (*protocol.AuthMessage, error) {
 		return &protocol.AuthMessage{
@@ -73,35 +71,35 @@ func printTitle(title string) {
 	log.Println(s)
 }
 
-func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server, string, string) {
+func startCoordinator(t *testing.T) (*coordinator.CoordinatorState, *http.Server, string, string) {
 	host := "localhost"
 	port := 9999
 	addr := fmt.Sprintf("%s:%d", host, port)
 
-	agent, err := agent.Make(appName, "")
-	require.NoError(t, err)
-
-	selector := &MockServerSelector{
-		serverAliases: []uint64{},
+	log := logrus.New()
+	auth := authentication.Make()
+	auth.AddOrUpdateAuthenticator("testAuth", makeTestAuthenticator())
+	config := coordinator.Config{
+		ServerSelector: &MockServerSelector{serverAliases: []uint64{}},
+		Auth:           auth,
+		Log:            log,
 	}
-	cs := coordinator.MakeState(agent, selector)
+	state := coordinator.MakeState(&config)
 
-	auth := makeTestAuthenticator()
-	cs.Auth.AddOrUpdateAuthenticator("testAuth", auth)
-	go coordinator.Process(&cs)
+	go coordinator.Process(state)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := coordinator.UpgradeDiscoverRequest(&cs, w, r)
+		ws, err := coordinator.UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
 		require.NoError(t, err)
-		coordinator.ConnectCommServer(&cs, ws)
+		coordinator.ConnectCommServer(state, ws)
 	})
 
 	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := coordinator.UpgradeConnectRequest(&cs, w, r)
+		ws, err := coordinator.UpgradeRequest(state, protocol.Role_CLIENT, w, r)
 
 		require.NoError(t, err)
-		coordinator.ConnectClient(&cs, ws)
+		coordinator.ConnectClient(state, ws)
 	})
 
 	s := &http.Server{Addr: addr, Handler: mux}
@@ -110,16 +108,16 @@ func startCoordinator(t *testing.T) (coordinator.CoordinatorState, *http.Server,
 		s.ListenAndServe()
 	}()
 
-	discoveryUrl := fmt.Sprintf("ws://%s/discover", addr)
-	connectUrl := fmt.Sprintf("ws://%s/connect", addr)
-	return cs, s, discoveryUrl, connectUrl
+	discoveryURL := fmt.Sprintf("ws://%s/discover", addr)
+	connectURL := fmt.Sprintf("ws://%s/connect", addr)
+	return state, s, discoveryURL, connectURL
 }
 
 type peerSnapshot struct {
 	Topics map[string]bool
 }
 
-type worldCommSnapshot struct {
+type commServerSnapshot struct {
 	Alias      uint64
 	PeersCount int
 	Peers      map[uint64]peerSnapshot
@@ -127,10 +125,10 @@ type worldCommSnapshot struct {
 
 type testReporter struct {
 	RequestData chan bool
-	Data        chan worldCommSnapshot
+	Data        chan commServerSnapshot
 }
 
-func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
+func (r *testReporter) Report(state *commserver.State) {
 	select {
 	case <-r.RequestData:
 		peers := make(map[uint64]peerSnapshot)
@@ -147,7 +145,7 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 			peers[p.Alias] = s
 		}
 
-		snapshot := worldCommSnapshot{
+		snapshot := commServerSnapshot{
 			Alias:      state.Alias,
 			PeersCount: len(state.Peers),
 			Peers:      peers,
@@ -157,48 +155,38 @@ func (r *testReporter) Report(state *worldcomm.WorldCommunicationState) {
 	}
 }
 
-func (r *testReporter) GetStateSnapshot() worldCommSnapshot {
+func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 	r.RequestData <- true
 	return <-r.Data
 }
 
-func startCommServer(t *testing.T, discoveryUrl string) *testReporter {
-	agent, err := agent.Make(appName, "")
-	require.NoError(t, err)
-
+func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 	logger := logrus.New()
-	logger.SetFormatter(&logrus.TextFormatter{})
-	services := worldcomm.Services{
-		Auth:       authentication.Make(),
-		Marshaller: &protocol.Marshaller{},
-		Log:        logger,
-		WebRtc:     webrtc.MakeWebRtc(),
-		Agent:      &worldcomm.WorldCommAgent{Agent: agent},
-		Zipper:     &utils.GzipCompression{},
-	}
-
+	auth := authentication.Make()
 	authenticator := makeTestAuthenticator()
-	services.Auth.AddOrUpdateAuthenticator("testAuth", authenticator)
+	auth.AddOrUpdateAuthenticator("testAuth", authenticator)
 
 	reporter := &testReporter{
 		RequestData: make(chan bool),
-		Data:        make(chan worldCommSnapshot),
+		Data:        make(chan commServerSnapshot),
 	}
 
-	config := worldcomm.Config{
+	config := commserver.Config{
+		Auth:           auth,
+		Log:            logger,
 		AuthMethod:     "testAuth",
-		CoordinatorUrl: discoveryUrl,
-		Services:       services,
+		CoordinatorURL: discoveryURL,
 		ReportPeriod:   1 * time.Second,
-		Reporter:       reporter,
+		Reporter:       func(state *commserver.State) { reporter.Report(state) },
 	}
 
-	ws := worldcomm.MakeState(config)
-	t.Log("starting communication server node", discoveryUrl)
+	ws, err := commserver.MakeState(&config)
+	require.NoError(t, err)
+	t.Log("starting communication server node", discoveryURL)
 
-	require.NoError(t, worldcomm.ConnectCoordinator(&ws))
-	go worldcomm.ProcessMessagesQueue(&ws)
-	go worldcomm.Process(&ws)
+	require.NoError(t, commserver.ConnectCoordinator(ws))
+	go commserver.ProcessMessagesQueue(ws)
+	go commserver.Process(ws)
 	return reporter
 }
 
@@ -208,8 +196,8 @@ type TestClient struct {
 	avatar string
 }
 
-func makeTestClient(id string, connectUrl string) *TestClient {
-	url := fmt.Sprintf("%s?method=testAuth", connectUrl)
+func makeTestClient(id string, connectURL string) *TestClient {
+	url := fmt.Sprintf("%s?method=testAuth", connectURL)
 	client := MakeClient(id, url)
 
 	client.receivedReliable = make(chan ReceivedMessage, 256)
@@ -256,18 +244,18 @@ func (tc *TestClient) sendProfileReliableMessage(t *testing.T, topic string) {
 }
 
 func TestE2E(t *testing.T) {
-	_, server, discoveryUrl, connectUrl := startCoordinator(t)
+	_, server, discoveryURL, connectURL := startCoordinator(t)
 	defer server.Close()
 
 	dataMessage := protocol.DataMessage{}
 	profileData := protocol.ProfileData{}
 
 	printTitle("starting comm servers")
-	comm1Reporter := startCommServer(t, discoveryUrl)
-	comm2Reporter := startCommServer(t, discoveryUrl)
+	comm1Reporter := startCommServer(t, discoveryURL)
+	comm2Reporter := startCommServer(t, discoveryURL)
 
-	c1 := makeTestClient("client1", connectUrl)
-	c2 := makeTestClient("client2", connectUrl)
+	c1 := makeTestClient("client1", connectURL)
+	c2 := makeTestClient("client2", connectURL)
 
 	printTitle("Starting client1")
 	client1WorldData := c1.start(t)

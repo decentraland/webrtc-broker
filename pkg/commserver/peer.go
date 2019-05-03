@@ -1,4 +1,4 @@
-package worldcomm
+package commserver
 
 import (
 	"time"
@@ -13,7 +13,7 @@ type peer struct {
 	Topics map[string]struct{}
 	Index  int
 
-	services        Services
+	services        services
 	topicQueue      chan topicChange
 	messagesQueue   chan *peerMessage
 	unregisterQueue chan *peer
@@ -58,7 +58,6 @@ func (p *peer) Close() {
 
 func (p *peer) readReliablePump() {
 	marshaller := p.services.Marshaller
-	agent := p.services.Agent
 	header := protocol.WorldCommMessage{}
 
 	if p.reliableBuffer == nil {
@@ -79,7 +78,6 @@ func (p *peer) readReliablePump() {
 			continue
 		}
 
-		agent.RecordReceivedReliableFromPeerSize(n)
 		rawMsg := buffer[:n]
 		if err := marshaller.Unmarshal(rawMsg, &header); err != nil {
 			p.logError(err).Debug("decode header message failure")
@@ -113,7 +111,6 @@ func (p *peer) readReliablePump() {
 
 func (p *peer) readUnreliablePump() {
 	marshaller := p.services.Marshaller
-	agent := p.services.Agent
 
 	header := protocol.WorldCommMessage{}
 
@@ -135,7 +132,6 @@ func (p *peer) readUnreliablePump() {
 			continue
 		}
 
-		agent.RecordReceivedUnreliableFromPeerSize(n)
 		rawMsg := buffer[:n]
 		if err := marshaller.Unmarshal(rawMsg, &header); err != nil {
 			p.logError(err).Debug("decode header message failure")

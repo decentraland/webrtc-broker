@@ -8,8 +8,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"github.com/decentraland/communications-server-go/internal/authentication"
-	"github.com/decentraland/communications-server-go/internal/simulation"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
+	"github.com/decentraland/communications-server-go/pkg/simulation"
 )
 
 type V3 = simulation.V3

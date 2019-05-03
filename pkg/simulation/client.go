@@ -39,7 +39,7 @@ type ReceivedMessage struct {
 
 type Client struct {
 	id                 string
-	coordinatorUrl     string
+	coordinatorURL     string
 	coordinator        *websocket.Conn
 	conn               *webrtc.PeerConnection
 	sendReliable       chan []byte
@@ -123,10 +123,10 @@ func encodeAuthMessage(method string, role protocol.Role, data proto.Message) ([
 	return bytes, nil
 }
 
-func MakeClient(id string, coordinatorUrl string) *Client {
+func MakeClient(id string, coordinatorURL string) *Client {
 	c := &Client{
 		id:                    id,
-		coordinatorUrl:        coordinatorUrl,
+		coordinatorURL:        coordinatorURL,
 		authMessage:           make(chan []byte),
 		sendReliable:          make(chan []byte, 256),
 		sendUnreliable:        make(chan []byte, 256),
@@ -163,7 +163,7 @@ func (client *Client) CoordinatorWritePump() {
 }
 
 func (client *Client) startCoordination() error {
-	c, _, err := websocket.DefaultDialer.Dial(client.coordinatorUrl, nil)
+	c, _, err := websocket.DefaultDialer.Dial(client.coordinatorURL, nil)
 	if err != nil {
 		return err
 	}

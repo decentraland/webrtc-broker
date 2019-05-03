@@ -6,9 +6,10 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/decentraland/communications-server-go/internal/agent"
+	"github.com/sirupsen/logrus"
+
 	_testing "github.com/decentraland/communications-server-go/internal/testing"
-	"github.com/decentraland/communications-server-go/internal/ws"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/require"
@@ -24,98 +25,98 @@ func makeMockWebsocket() *MockWebsocket {
 	return _testing.MakeMockWebsocket()
 }
 
-func makeTestState(t *testing.T) CoordinatorState {
-	agent, err := agent.Make(appName, "")
-	require.NoError(t, err)
-	return MakeState(agent, MakeRandomServerSelector())
+func makeTestState(t *testing.T) *CoordinatorState {
+	config := Config{
+		ServerSelector: MakeRandomServerSelector(),
+		Log:            logrus.New(),
+	}
+	return MakeState(&config)
 }
 
 func TestUpgradeRequest(t *testing.T) {
 
-	testSuccessfulUpgrade := func(t *testing.T, req *http.Request, expectedRole protocol.Role) bool {
-		upgradeCalled := false
-		state := makeTestState(t)
-		auth := &MockAuthenticator{
+	testSuccessfulUpgrade := func(t *testing.T, req *http.Request, expectedRole protocol.Role) {
+		auth := authentication.Make()
+		auth.AddOrUpdateAuthenticator("fake", &MockAuthenticator{
 			AuthenticateQs_: func(role protocol.Role, qs url.Values) (bool, error) {
 				require.Equal(t, role, expectedRole)
 				return true, nil
 			},
-		}
-		state.Auth.AddOrUpdateAuthenticator("fake", auth)
-		state.upgrader = &MockUpgrader{
-			Upgrade_: func(w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-				upgradeCalled = true
-				return nil, nil
-			},
+		})
+		config := Config{
+			ServerSelector: MakeRandomServerSelector(),
+			Auth:           auth,
 		}
 
-		if expectedRole == protocol.Role_COMMUNICATION_SERVER {
-			_, err := UpgradeDiscoverRequest(&state, nil, req)
-			require.NoError(t, err)
-		} else {
-			_, err := UpgradeConnectRequest(&state, nil, req)
-			require.NoError(t, err)
-		}
+		ws := makeMockWebsocket()
 
-		return upgradeCalled
+		upgrader := &MockUpgrader{}
+		state := MakeState(&config)
+		state.upgrader = upgrader
+
+		upgrader.On("Upgrade", nil, req).Return(ws, nil)
+
+		_, err := UpgradeRequest(state, expectedRole, nil, req)
+		require.NoError(t, err)
+
+		upgrader.AssertExpectations(t)
 	}
 
 	t.Run("upgrade discover request", func(t *testing.T) {
 		req, err := http.NewRequest("GET", "/discover?method=fake", nil)
 		require.NoError(t, err)
-		require.True(t, testSuccessfulUpgrade(t, req, protocol.Role_COMMUNICATION_SERVER))
+		testSuccessfulUpgrade(t, req, protocol.Role_COMMUNICATION_SERVER)
 	})
 
 	t.Run("upgrade connect request", func(t *testing.T) {
 		req, err := http.NewRequest("GET", "/connect?method=fake", nil)
 		require.NoError(t, err)
-		require.True(t, testSuccessfulUpgrade(t, req, protocol.Role_CLIENT))
+		testSuccessfulUpgrade(t, req, protocol.Role_CLIENT)
 	})
 
 	t.Run("upgrade request (unauthorized)", func(t *testing.T) {
-		upgradeCalled := false
-		state := makeTestState(t)
-		auth := &MockAuthenticator{
+		auth := authentication.Make()
+		auth.AddOrUpdateAuthenticator("fake", &MockAuthenticator{
 			AuthenticateQs_: func(role protocol.Role, qs url.Values) (bool, error) {
 				require.Equal(t, role, protocol.Role_COMMUNICATION_SERVER)
 				return false, nil
 			},
+		})
+		config := Config{
+			ServerSelector: MakeRandomServerSelector(),
+			Auth:           auth,
 		}
-		state.Auth.AddOrUpdateAuthenticator("fake", auth)
-		state.upgrader = &MockUpgrader{
-			Upgrade_: func(w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-				upgradeCalled = true
-				return nil, nil
-			},
-		}
+
+		upgrader := &MockUpgrader{}
+		state := MakeState(&config)
+		state.upgrader = upgrader
 
 		req, err := http.NewRequest("GET", "/discover?method=fake", nil)
 		require.NoError(t, err)
-		_, err = UpgradeDiscoverRequest(&state, nil, req)
+		_, err = UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, nil, req)
 		require.Equal(t, err, UnauthorizedError)
-		require.False(t, upgradeCalled)
+		upgrader.AssertExpectations(t)
 	})
 
 	t.Run("upgrade request (no method provided))", func(t *testing.T) {
-		upgradeCalled := false
-		state := makeTestState(t)
-		state.upgrader = &MockUpgrader{
-			Upgrade_: func(w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-				upgradeCalled = true
-				return nil, nil
-			},
+		config := Config{
+			ServerSelector: MakeRandomServerSelector(),
 		}
+
+		upgrader := &MockUpgrader{}
+		state := MakeState(&config)
+		state.upgrader = upgrader
 
 		req, err := http.NewRequest("GET", "/discover", nil)
 		require.NoError(t, err)
-		_, err = UpgradeDiscoverRequest(&state, nil, req)
+		_, err = UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, nil, req)
 		require.Equal(t, err, NoMethodProvidedError)
-		require.False(t, upgradeCalled)
+		upgrader.AssertExpectations(t)
 	})
 }
 
 func TestReadPump(t *testing.T) {
-	setup := func() (CoordinatorState, *MockWebsocket, *Peer) {
+	setup := func() (*CoordinatorState, *MockWebsocket, *Peer) {
 		state := makeTestState(t)
 
 		conn := makeMockWebsocket()
@@ -126,14 +127,14 @@ func TestReadPump(t *testing.T) {
 
 	t.Run("webrtc message", func(t *testing.T) {
 		state, conn, client := setup()
-		defer closeState(&state)
+		defer closeState(state)
 
 		msg := &protocol.WebRtcMessage{
 			Type:    protocol.MessageType_WEBRTC_ANSWER,
 			ToAlias: 2,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
-		go readPump(&state, client)
+		go readPump(state, client)
 
 		p := <-state.unregister
 
@@ -151,14 +152,14 @@ func TestReadPump(t *testing.T) {
 
 	t.Run("connect message (with alias)", func(t *testing.T) {
 		state, conn, client := setup()
-		defer closeState(&state)
+		defer closeState(state)
 
 		msg := &protocol.ConnectMessage{
 			Type:    protocol.MessageType_CONNECT,
 			ToAlias: 2,
 		}
 		require.NoError(t, conn.PrepareToRead(msg))
-		go readPump(&state, client)
+		go readPump(state, client)
 
 		p := <-state.unregister
 
@@ -178,7 +179,7 @@ func TestWritePump(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		state := makeTestState(t)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
@@ -196,13 +197,13 @@ func TestWritePump(t *testing.T) {
 		p.send <- msg
 		p.send <- msg
 
-		p.writePump(&state)
+		p.writePump(state)
 		require.Equal(t, i, 1)
 	})
 
 	t.Run("first write error", func(t *testing.T) {
 		state := makeTestState(t)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		conn.WriteMessage_ = func(ws *MockWebsocket, bytes []byte) error {
@@ -214,12 +215,12 @@ func TestWritePump(t *testing.T) {
 		p.send <- msg
 		p.send <- msg
 
-		p.writePump(&state)
+		p.writePump(state)
 	})
 
 	t.Run("first write error", func(t *testing.T) {
 		state := makeTestState(t)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		i := 0
@@ -236,16 +237,16 @@ func TestWritePump(t *testing.T) {
 		p.send <- msg
 		p.send <- msg
 
-		p.writePump(&state)
+		p.writePump(state)
 	})
 }
 
 func TestConnectCommServer(t *testing.T) {
 	state := makeTestState(t)
-	defer closeState(&state)
+	defer closeState(state)
 
 	conn := makeMockWebsocket()
-	ConnectCommServer(&state, conn)
+	ConnectCommServer(state, conn)
 
 	p := <-state.registerCommServer
 	p.Close()
@@ -255,10 +256,10 @@ func TestConnectCommServer(t *testing.T) {
 
 func TestConnectClient(t *testing.T) {
 	state := makeTestState(t)
-	defer closeState(&state)
+	defer closeState(state)
 
 	conn := makeMockWebsocket()
-	ConnectClient(&state, conn)
+	ConnectClient(state, conn)
 
 	p := <-state.registerClient
 	p.Close()
@@ -268,7 +269,7 @@ func TestConnectClient(t *testing.T) {
 
 func TestRegisterCommServer(t *testing.T) {
 	state := makeTestState(t)
-	defer closeState(&state)
+	defer closeState(state)
 
 	conn := makeMockWebsocket()
 	s := makeCommServer(conn)
@@ -280,7 +281,7 @@ func TestRegisterCommServer(t *testing.T) {
 
 	state.registerCommServer <- s
 	state.registerCommServer <- s2
-	go Process(&state)
+	go Process(state)
 
 	welcomeMessage := &protocol.WelcomeMessage{}
 
@@ -299,7 +300,7 @@ func TestRegisterCommServer(t *testing.T) {
 
 func TestRegisterClient(t *testing.T) {
 	state := makeTestState(t)
-	defer closeState(&state)
+	defer closeState(state)
 
 	conn := makeMockWebsocket()
 	c := makeClient(conn)
@@ -311,7 +312,7 @@ func TestRegisterClient(t *testing.T) {
 
 	state.registerClient <- c
 	state.registerClient <- c2
-	go Process(&state)
+	go Process(state)
 
 	welcomeMessage := &protocol.WelcomeMessage{}
 
@@ -329,12 +330,15 @@ func TestRegisterClient(t *testing.T) {
 }
 
 func TestUnregister(t *testing.T) {
-	agent, err := agent.Make(appName, "")
-	require.NoError(t, err)
 	selector := MakeRandomServerSelector()
-	state := MakeState(agent, selector)
+
+	config := Config{
+		ServerSelector: selector,
+		Log:            logrus.New(),
+	}
+	state := MakeState(&config)
 	state.unregister = make(chan *Peer)
-	defer closeState(&state)
+	defer closeState(state)
 
 	conn := makeMockWebsocket()
 	s := makeCommServer(conn)
@@ -350,7 +354,7 @@ func TestUnregister(t *testing.T) {
 	state.Peers[s2.Alias] = s2
 	selector.serverAliases[s2.Alias] = true
 
-	go Process(&state)
+	go Process(state)
 	state.unregister <- s
 	state.unregister <- s2
 	state.stop <- true
@@ -365,7 +369,7 @@ func TestSignaling(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		state := makeTestState(t)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
@@ -394,7 +398,7 @@ func TestSignaling(t *testing.T) {
 			toAlias: p.Alias,
 		}
 
-		go Process(&state)
+		go Process(state)
 
 		<-p.send
 		<-p2.send
@@ -405,7 +409,7 @@ func TestSignaling(t *testing.T) {
 	t.Run("on peer not found", func(t *testing.T) {
 		state := makeTestState(t)
 		state.signalingQueue = make(chan *inMessage)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
@@ -414,7 +418,7 @@ func TestSignaling(t *testing.T) {
 
 		state.Peers[p.Alias] = p
 
-		go Process(&state)
+		go Process(state)
 
 		state.signalingQueue <- &inMessage{
 			msgType: protocol.MessageType_WEBRTC_ANSWER,
@@ -429,7 +433,7 @@ func TestSignaling(t *testing.T) {
 	t.Run("on channel closed", func(t *testing.T) {
 		state := makeTestState(t)
 		state.signalingQueue = make(chan *inMessage)
-		defer closeState(&state)
+		defer closeState(state)
 
 		conn := makeMockWebsocket()
 		p := makeClient(conn)
@@ -444,7 +448,7 @@ func TestSignaling(t *testing.T) {
 		state.Peers[p.Alias] = p
 		state.Peers[p2.Alias] = p2
 
-		go Process(&state)
+		go Process(state)
 
 		state.signalingQueue <- &inMessage{
 			msgType: protocol.MessageType_WEBRTC_ANSWER,

@@ -4,24 +4,23 @@ import (
 	"github.com/decentraland/communications-server-go/internal/logging"
 
 	pion "github.com/pion/webrtc/v2"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/pion/datachannel"
 )
 
-type OfferOptions = pion.OfferOptions
+// PeerConnection represents the webrtc connection
 type PeerConnection = pion.PeerConnection
+
+// DataChannel is the top level pion's data channel
 type DataChannel = pion.DataChannel
+
+// ReadWriteCloser is the detached datachannel pion's interface for read/write
 type ReadWriteCloser = datachannel.ReadWriteCloser
 
-var config = pion.Configuration{
-	ICEServers: []pion.ICEServer{
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-	},
-}
+// ICEServer represents a ICEServer config
+type ICEServer = pion.ICEServer
 
+// IWebRtc is this module interface
 type IWebRtc interface {
 	NewConnection(peerAlias uint64) (*PeerConnection, error)
 	CreateReliableDataChannel(conn *PeerConnection) (*DataChannel, error)
@@ -37,10 +36,9 @@ type IWebRtc interface {
 	Close(conn *PeerConnection) error
 }
 
-type WebRtc struct{}
-
-func MakeWebRtc() *WebRtc {
-	return &WebRtc{}
+// WebRtc is our inmplemenation of IWebRtc
+type WebRtc struct {
+	ICEServers []ICEServer
 }
 
 func (w *WebRtc) NewConnection(peerAlias uint64) (*PeerConnection, error) {
@@ -51,9 +49,10 @@ func (w *WebRtc) NewConnection(peerAlias uint64) (*PeerConnection, error) {
 
 	api := pion.NewAPI(pion.WithSettingEngine(s))
 
-	conn, err := api.NewPeerConnection(config)
+	conn, err := api.NewPeerConnection(pion.Configuration{
+		ICEServers: w.ICEServers,
+	})
 	if err != nil {
-		log.WithError(err).Error("cannot create a new webrtc connection")
 		return nil, err
 	}
 

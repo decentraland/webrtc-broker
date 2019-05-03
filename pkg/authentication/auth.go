@@ -14,7 +14,7 @@ type Authenticator interface {
 	Authenticate(role protocol.Role, bytes []byte) (bool, error)
 	AuthenticateQs(role protocol.Role, qs url.Values) (bool, error)
 	GenerateAuthMessage(role protocol.Role) (*protocol.AuthMessage, error)
-	GenerateAuthURL(baseUrl string, role protocol.Role) (string, error)
+	GenerateAuthURL(baseURL string, role protocol.Role) (string, error)
 }
 
 type Authentication struct {
@@ -40,8 +40,8 @@ func (a *NoopAuthenticator) GenerateAuthMessage(role protocol.Role) (*protocol.A
 	return m, nil
 }
 
-func (a *NoopAuthenticator) GenerateAuthURL(baseUrl string, role protocol.Role) (string, error) {
-	u := fmt.Sprintf("%s?method=noop", baseUrl)
+func (a *NoopAuthenticator) GenerateAuthURL(baseURL string, role protocol.Role) (string, error) {
+	u := fmt.Sprintf("%s?method=noop", baseURL)
 	return u, nil
 }
 
@@ -84,12 +84,12 @@ func (auth *Authentication) GenerateAuthMessage(method string, role protocol.Rol
 	return authenticator.GenerateAuthMessage(role)
 }
 
-func (auth *Authentication) GenerateAuthURL(method string, baseUrl string, role protocol.Role) (string, error) {
+func (auth *Authentication) GenerateAuthURL(method string, baseURL string, role protocol.Role) (string, error) {
 	authenticator := auth.methods[method]
 
 	if authenticator == nil {
 		return "", UnsupportedAuthMethod
 	}
 
-	return authenticator.GenerateAuthURL(baseUrl, role)
+	return authenticator.GenerateAuthURL(baseURL, role)
 }

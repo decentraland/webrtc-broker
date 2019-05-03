@@ -8,8 +8,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/utils"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/segmentio/ksuid"
@@ -103,7 +103,7 @@ func updateLocationTopics(client *Client, p V3) {
 	}
 }
 
-func StartBot(coordinatorUrl string, options BotOptions) {
+func StartBot(coordinatorURL string, options BotOptions) {
 	if len(options.Checkpoints) < 2 {
 		log.Fatal(errors.New("invalid path, need at least two checkpoints"))
 	}
@@ -116,8 +116,8 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 		avatar = getRandomAvatar()
 	}
 
-	peerId := ksuid.New().String()
-	url, err := options.Auth.GenerateAuthURL(options.AuthMethod, coordinatorUrl, protocol.Role_CLIENT)
+	peerID := ksuid.New().String()
+	url, err := options.Auth.GenerateAuthURL(options.AuthMethod, coordinatorURL, protocol.Role_CLIENT)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 				Category:    protocol.Category_PROFILE,
 				Time:        ms,
 				AvatarType:  avatar,
-				DisplayName: peerId,
+				DisplayName: peerID,
 				PublicKey:   "key",
 			})
 			if err != nil {
@@ -282,7 +282,7 @@ func StartBot(coordinatorUrl string, options BotOptions) {
 				if nextCheckpointIndex == len(checkpoints)-1 {
 					nextCheckpointIndex = 0
 				} else {
-					nextCheckpointIndex += 1
+					nextCheckpointIndex++
 				}
 				p = nextCheckpoint
 			}

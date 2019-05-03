@@ -5,10 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/decentraland/communications-server-go/internal/agent"
-	"github.com/decentraland/communications-server-go/internal/authentication"
 	"github.com/decentraland/communications-server-go/internal/logging"
 	"github.com/decentraland/communications-server-go/internal/ws"
+	"github.com/decentraland/communications-server-go/pkg/authentication"
 	protocol "github.com/decentraland/communications-server-go/pkg/protocol"
 )
 
@@ -38,19 +37,20 @@ type Peer struct {
 	isServer bool
 }
 
+// IServerSelector is in charge of tracking and processing the server list
 type IServerSelector interface {
 	ServerRegistered(server *Peer)
 	ServerUnregistered(server *Peer)
 	GetServerAliasList(forPeer *Peer) []uint64
 }
 
+// CoordinatorState represent the state of the coordinator
 type CoordinatorState struct {
 	serverSelector IServerSelector
 	upgrader       ws.IUpgrader
-	Auth           authentication.Authentication
+	auth           authentication.Authentication
 	marshaller     protocol.IMarshaller
 	log            *logging.Logger
-	agent          coordinatorAgent
 
 	LastPeerAlias uint64
 
@@ -63,14 +63,21 @@ type CoordinatorState struct {
 	softStop           bool
 }
 
-func MakeState(agent agent.IAgent, serverSelector IServerSelector) CoordinatorState {
-	return CoordinatorState{
-		serverSelector:     serverSelector,
+// Config is the coordinator config
+type Config struct {
+	Log            *logging.Logger
+	ServerSelector IServerSelector
+	Auth           authentication.Authentication
+}
+
+// MakeState creates a new CoordinatorState
+func MakeState(config *Config) *CoordinatorState {
+	return &CoordinatorState{
+		serverSelector:     config.ServerSelector,
 		upgrader:           ws.MakeUpgrader(),
-		Auth:               authentication.Make(),
+		auth:               config.Auth,
 		marshaller:         &protocol.Marshaller{},
-		log:                logging.New(),
-		agent:              coordinatorAgent{agent: agent},
+		log:                config.Log,
 		Peers:              make(map[uint64]*Peer),
 		registerCommServer: make(chan *Peer, 255),
 		registerClient:     make(chan *Peer, 255),
@@ -99,7 +106,6 @@ func (p *Peer) Send(state *CoordinatorState, msg protocol.Message) error {
 		return err
 	}
 
-	state.agent.RecordSentSize(len(bytes))
 	p.send <- bytes
 	return nil
 }
@@ -185,7 +191,6 @@ func readPump(state *CoordinatorState, p *Peer) {
 			continue
 		}
 
-		state.agent.RecordReceivedSize(len(bytes))
 		msgType := header.GetType()
 
 		switch msgType {
@@ -227,7 +232,7 @@ func readPump(state *CoordinatorState, p *Peer) {
 	}
 }
 
-func upgradeRequest(state *CoordinatorState, role protocol.Role, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
+func UpgradeRequest(state *CoordinatorState, role protocol.Role, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
 	qs := r.URL.Query()
 
 	method := qs["method"]
@@ -236,7 +241,7 @@ func upgradeRequest(state *CoordinatorState, role protocol.Role, w http.Response
 		return nil, NoMethodProvidedError
 	}
 
-	isValid, err := state.Auth.AuthenticateQs(method[0], role, qs)
+	isValid, err := state.auth.AuthenticateQs(method[0], role, qs)
 
 	if err != nil {
 		return nil, err
@@ -247,14 +252,6 @@ func upgradeRequest(state *CoordinatorState, role protocol.Role, w http.Response
 	}
 
 	return state.upgrader.Upgrade(w, r)
-}
-
-func UpgradeConnectRequest(state *CoordinatorState, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-	return upgradeRequest(state, protocol.Role_CLIENT, w, r)
-}
-
-func UpgradeDiscoverRequest(state *CoordinatorState, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-	return upgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
 }
 
 func closeState(state *CoordinatorState) {
@@ -329,9 +326,6 @@ func Process(state *CoordinatorState) {
 				}
 			}
 
-			state.agent.RecordTotalClientConnections(clientsCount)
-			state.agent.RecordTotalServerConnections(serversCount)
-
 		case <-state.stop:
 			log.Debug("stop signal")
 			return
@@ -345,6 +339,31 @@ func Process(state *CoordinatorState) {
 			return
 		}
 	}
+}
+
+// Register coordinator endpoints for server discovery and client connect
+func Register(state *CoordinatorState, mux *http.ServeMux) {
+	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
+
+		if err != nil {
+			state.log.WithError(err).Error("socket connect error (discovery)")
+			return
+		}
+
+		ConnectCommServer(state, ws)
+	})
+
+	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := UpgradeRequest(state, protocol.Role_CLIENT, w, r)
+
+		if err != nil {
+			state.log.WithError(err).Error("socket connect error (client)")
+			return
+		}
+
+		ConnectClient(state, ws)
+	})
 }
 
 func registerCommServer(state *CoordinatorState, p *Peer) error {
