@@ -40,6 +40,8 @@ github.com/pion/dtls v1.3.3/go.mod h1:CjlPLfQdsTg3G4AEXjJp8FY5bRweBlxHrgoFrN+fQs
 github.com/pion/ice v0.2.1/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
 github.com/pion/ice v0.2.6-0.20190503134358-3595da5d93be h1:0zWj8aBpoJwnyVUCLXSQ3bkXzQo/8uHt/Om54v4RQPM=
 github.com/pion/ice v0.2.6-0.20190503134358-3595da5d93be/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
+github.com/pion/ice v0.2.6-0.20190504234615-695fb1a94626 h1:vJZXwdIOE2uhe215GkPx+X3TTbKxzUpXP0kw+qazrog=
+github.com/pion/ice v0.2.6-0.20190504234615-695fb1a94626/go.mod h1:igvbO76UeYthbSu0UsUTqjyWpFT3diUmM+x2vt4p4fw=
 github.com/pion/logging v0.2.1-0.20190404202522-3c79a8accd0a/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
 github.com/pion/logging v0.2.1 h1:LwASkBKZ+2ysGJ+jLv1E/9H1ge0k1nTfi1X+5zirkDk=
 github.com/pion/logging v0.2.1/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=

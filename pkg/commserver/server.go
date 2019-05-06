@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
-	"github.com/decentraland/webrtc-broker/internal/utils"
 	"github.com/decentraland/webrtc-broker/internal/webrtc"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -148,7 +147,7 @@ type services struct {
 	Log        *logging.Logger
 	Marshaller protocol.IMarshaller
 	WebRtc     webrtc.IWebRtc
-	Zipper     utils.ZipCompression
+	Zipper     ZipCompression
 }
 
 // State is the commm server state
@@ -197,7 +196,7 @@ type Config struct {
 	Log                     *logging.Logger
 	Marshaller              protocol.IMarshaller
 	WebRtc                  webrtc.IWebRtc
-	Zipper                  utils.ZipCompression
+	Zipper                  ZipCompression
 	EstablishSessionTimeout time.Duration
 	ReportPeriod            time.Duration
 	Reporter                func(state *State)
@@ -241,7 +240,7 @@ func MakeState(config *Config) (*State, error) {
 	}
 
 	if ss.Zipper == nil {
-		ss.Zipper = &utils.GzipCompression{}
+		ss.Zipper = &GzipCompression{}
 	}
 
 	state := &State{

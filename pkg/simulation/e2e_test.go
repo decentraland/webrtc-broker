@@ -12,7 +12,6 @@ import (
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
-	"github.com/decentraland/webrtc-broker/internal/utils"
 	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	"github.com/decentraland/webrtc-broker/pkg/coordinator"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -190,57 +189,17 @@ func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 	return reporter
 }
 
-type TestClient struct {
-	client *Client
-	alias  uint64
-	avatar string
-}
-
-func makeTestClient(id string, connectURL string) *TestClient {
-	url := fmt.Sprintf("%s?method=testAuth", connectURL)
-	client := MakeClient(id, url)
-
-	client.receivedReliable = make(chan ReceivedMessage, 256)
-	client.receivedUnreliable = make(chan ReceivedMessage, 256)
-	return &TestClient{client: client, avatar: getRandomAvatar()}
-}
-
-func (tc *TestClient) start(t *testing.T) WorldData {
+func start(t *testing.T, client *Client) peerData {
 	go func() {
-		require.NoError(t, tc.client.startCoordination())
+		require.NoError(t, client.startCoordination())
 	}()
 
-	worldData := <-tc.client.worldData
-	tc.alias = worldData.MyAlias
-
-	return worldData
+	return <-client.peerData
 }
 
-func (tc *TestClient) sendTopicSubscriptionMessage(t *testing.T, topics map[string]bool) {
-	require.NoError(t, tc.client.sendTopicSubscriptionMessage(topics))
-}
-
-func (tc *TestClient) encodeProfileMessage(t *testing.T, topic string) []byte {
-	ms := utils.NowMs()
-	bytes, err := encodeTopicMessage(topic, &protocol.ProfileData{
-		Category:    protocol.Category_PROFILE,
-		Time:        ms,
-		AvatarType:  tc.avatar,
-		DisplayName: fmt.Sprintf("%d", tc.alias),
-		PublicKey:   "key",
-	})
-
-	require.NoError(t, err)
-
-	return bytes
-}
-
-func (tc *TestClient) sendProfileUnreliableMessage(t *testing.T, topic string) {
-	tc.client.sendUnreliable <- tc.encodeProfileMessage(t, topic)
-}
-
-func (tc *TestClient) sendProfileReliableMessage(t *testing.T, topic string) {
-	tc.client.sendReliable <- tc.encodeProfileMessage(t, topic)
+type recvMessage struct {
+	msgType protocol.MessageType
+	raw     []byte
 }
 
 func TestE2E(t *testing.T) {
@@ -248,22 +207,56 @@ func TestE2E(t *testing.T) {
 	defer server.Close()
 
 	dataMessage := protocol.DataMessage{}
-	profileData := protocol.ProfileData{}
 
 	printTitle("starting comm servers")
 	comm1Reporter := startCommServer(t, discoveryURL)
 	comm2Reporter := startCommServer(t, discoveryURL)
 
-	c1 := makeTestClient("client1", connectURL)
-	c2 := makeTestClient("client2", connectURL)
+	auth := authentication.Make()
+	authenticator := makeTestAuthenticator()
+	auth.AddOrUpdateAuthenticator("testAuth", authenticator)
+
+	c1ReceivedReliable := make(chan recvMessage, 256)
+	c1ReceivedUnreliable := make(chan recvMessage, 256)
+	config := Config{
+		Auth:           auth,
+		AuthMethod:     "testAuth",
+		CoordinatorURL: connectURL,
+		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
+			m := recvMessage{msgType: msgType, raw: raw}
+			if reliable {
+				c1ReceivedReliable <- m
+			} else {
+				c1ReceivedUnreliable <- m
+			}
+		},
+	}
+	c1 := MakeClient(&config)
+
+	c2ReceivedReliable := make(chan recvMessage, 256)
+	c2ReceivedUnreliable := make(chan recvMessage, 256)
+	config = Config{
+		Auth:           auth,
+		AuthMethod:     "testAuth",
+		CoordinatorURL: connectURL,
+		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
+			m := recvMessage{msgType: msgType, raw: raw}
+			if reliable {
+				c2ReceivedReliable <- m
+			} else {
+				c2ReceivedUnreliable <- m
+			}
+		},
+	}
+	c2 := MakeClient(&config)
 
 	printTitle("Starting client1")
-	client1WorldData := c1.start(t)
-	require.NoError(t, c1.client.connect(client1WorldData.MyAlias, client1WorldData.AvailableServers[0]))
+	c1Data := start(t, c1)
+	require.NoError(t, c1.Connect(c1Data.Alias, c1Data.AvailableServers[0]))
 
 	printTitle("Starting client2")
-	client2WorldData := c2.start(t)
-	require.NoError(t, c2.client.connect(client1WorldData.MyAlias, client2WorldData.AvailableServers[1]))
+	c2Data := start(t, c2)
+	require.NoError(t, c2.Connect(c2Data.Alias, c2Data.AvailableServers[1]))
 
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
@@ -272,139 +265,155 @@ func TestE2E(t *testing.T) {
 	comm2Snapshot := comm2Reporter.GetStateSnapshot()
 	require.NotEmpty(t, comm1Snapshot.Alias)
 	require.NotEmpty(t, comm1Snapshot.Alias)
-	require.NotEmpty(t, c1.alias)
-	require.NotEmpty(t, c2.alias)
+	require.NotEmpty(t, c1Data.Alias)
+	require.NotEmpty(t, c2Data.Alias)
 	require.Equal(t, 4, comm1Snapshot.PeersCount+comm2Snapshot.PeersCount)
 
 	printTitle("Aliases")
 	log.Println("commserver1 alias is", comm1Snapshot.Alias)
 	log.Println("commserver2 alias is", comm2Snapshot.Alias)
-	log.Println("client1 alias is", c1.alias)
-	log.Println("client2 alias is", c2.alias)
+	log.Println("client1 alias is", c1Data.Alias)
+	log.Println("client2 alias is", c2Data.Alias)
 
 	printTitle("Connections")
 	log.Println(comm1Snapshot.Peers)
 	log.Println(comm2Snapshot.Peers)
 
 	printTitle("Authorizing clients")
-	authBytes, err := encodeAuthMessage("testAuth", protocol.Role_CLIENT, nil)
+
+	authMessage := protocol.AuthMessage{
+		Type:   protocol.MessageType_AUTH,
+		Method: "testAuth",
+		Role:   protocol.Role_CLIENT,
+	}
+	authBytes, err := proto.Marshal(&authMessage)
 	require.NoError(t, err)
-	c1.client.authMessage <- authBytes
-	c2.client.authMessage <- authBytes
 
-	recvMsg := <-c1.client.receivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
+	c1.authMessage <- authBytes
+	c2.authMessage <- authBytes
 
-	recvMsg = <-c2.client.receivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
+	recvMsg := <-c1ReceivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
+
+	recvMsg = <-c2ReceivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
 	comm1Snapshot = comm1Reporter.GetStateSnapshot()
 	comm2Snapshot = comm2Reporter.GetStateSnapshot()
 
-	printTitle("Both clients are subscribing to 'profile' topic")
-	c1.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
-	c2.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
+	printTitle("Both clients are subscribing to 'test' topic")
+	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
+	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
 
 	// NOTE: wait until subscriptions are ready
 	time.Sleep(sleepPeriod)
 	comm1Snapshot = comm1Reporter.GetStateSnapshot()
 	comm2Snapshot = comm2Reporter.GetStateSnapshot()
-	require.True(t, comm1Snapshot.Peers[c1.alias].Topics["profile"])
-	require.True(t, comm2Snapshot.Peers[c2.alias].Topics["profile"])
+	require.True(t, comm1Snapshot.Peers[c1Data.Alias].Topics["test"])
+	require.True(t, comm2Snapshot.Peers[c2Data.Alias].Topics["test"])
 
-	printTitle("Each client sends a profile message, by reliable channel")
-	c1.sendProfileReliableMessage(t, "profile")
-	c2.sendProfileReliableMessage(t, "profile")
+	printTitle("Each client sends a topic message, by reliable channel")
+	msg := protocol.TopicMessage{
+		Type:  protocol.MessageType_TOPIC,
+		Topic: "test",
+		Body:  []byte("c1 test"),
+	}
+	c1EncodedMessage, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+	c1.SendReliable <- c1EncodedMessage
+
+	msg = protocol.TopicMessage{
+		Type:  protocol.MessageType_TOPIC,
+		Topic: "test",
+		Body:  []byte("c2 test"),
+	}
+	c2EncodedMessage, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+	c2.SendReliable <- c2EncodedMessage
 
 	// NOTE wait until messages are received
 	time.Sleep(longSleepPeriod)
-	require.Len(t, c1.client.receivedReliable, 1)
-	require.Len(t, c2.client.receivedReliable, 1)
+	require.Len(t, c1ReceivedReliable, 1)
+	require.Len(t, c2ReceivedReliable, 1)
 
-	recvMsg = <-c1.client.receivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c2.alias, dataMessage.FromAlias)
+	recvMsg = <-c1ReceivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c2 test"), dataMessage.Body)
+	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
 
-	recvMsg = <-c2.client.receivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c1.alias, dataMessage.FromAlias)
+	recvMsg = <-c2ReceivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c1 test"), dataMessage.Body)
+	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
 
-	printTitle("Each client sends a profile message, by unreliable channel")
-	c1.sendProfileUnreliableMessage(t, "profile")
-	c2.sendProfileUnreliableMessage(t, "profile")
+	printTitle("Each client sends a topic message, by unreliable channel")
+	c1.SendUnreliable <- c1EncodedMessage
+	c2.SendUnreliable <- c2EncodedMessage
 
 	time.Sleep(longSleepPeriod)
-	require.Len(t, c1.client.receivedUnreliable, 1)
-	require.Len(t, c2.client.receivedUnreliable, 1)
+	require.Len(t, c1ReceivedUnreliable, 1)
+	require.Len(t, c2ReceivedUnreliable, 1)
 
-	recvMsg = <-c1.client.receivedUnreliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c2.alias, dataMessage.FromAlias)
+	recvMsg = <-c1ReceivedUnreliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c2 test"), dataMessage.Body)
+	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
 
-	recvMsg = <-c2.client.receivedUnreliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c1.alias, dataMessage.FromAlias)
+	recvMsg = <-c2ReceivedUnreliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c1 test"), dataMessage.Body)
+	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
 
 	printTitle("Remove topic")
-	c2.sendTopicSubscriptionMessage(t, map[string]bool{})
+	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{}))
 
 	time.Sleep(sleepPeriod)
 	comm2Snapshot = comm2Reporter.GetStateSnapshot()
-	require.False(t, comm2Snapshot.Peers[c2.alias].Topics["profile"])
+	require.False(t, comm2Snapshot.Peers[c2Data.Alias].Topics["test"])
 
 	printTitle("Testing webrtc connection close")
-	c2.client.stopReliableQueue <- true
-	c2.client.stopUnreliableQueue <- true
-	go c2.client.conn.Close()
-	c2.client.conn = nil
-	c2.client.connect(client2WorldData.MyAlias, comm1Snapshot.Alias)
+	c2.stopReliableQueue <- true
+	c2.stopUnreliableQueue <- true
+	go c2.conn.Close()
+	c2.conn = nil
+	c2.Connect(c2Data.Alias, comm1Snapshot.Alias)
 
-	c2.client.authMessage <- authBytes
-	recvMsg = <-c2.client.receivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.Type)
+	c2.authMessage <- authBytes
+	recvMsg = <-c2ReceivedReliable
+	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
 
 	printTitle("Subscribe to topics again")
-	c2.sendTopicSubscriptionMessage(t, map[string]bool{"profile": true})
+	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
 	time.Sleep(longSleepPeriod)
 	comm1Snapshot = comm1Reporter.GetStateSnapshot()
-	require.True(t, comm1Snapshot.Peers[c1.alias].Topics["profile"])
-	require.True(t, comm1Snapshot.Peers[c2.alias].Topics["profile"])
+	require.True(t, comm1Snapshot.Peers[c1Data.Alias].Topics["test"])
+	require.True(t, comm1Snapshot.Peers[c2Data.Alias].Topics["test"])
 
-	printTitle("Each client sends a profile message, by reliable channel")
-	c1.sendProfileReliableMessage(t, "profile")
-	c2.sendProfileReliableMessage(t, "profile")
+	printTitle("Each client sends a topic message, by reliable channel")
+	c1.SendReliable <- c1EncodedMessage
+	c2.SendReliable <- c2EncodedMessage
 
 	time.Sleep(sleepPeriod)
-	require.Len(t, c1.client.receivedReliable, 1)
-	require.Len(t, c2.client.receivedReliable, 1)
+	require.Len(t, c1ReceivedReliable, 1)
+	require.Len(t, c2ReceivedReliable, 1)
 
-	recvMsg = <-c1.client.receivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c2.alias, dataMessage.FromAlias)
+	recvMsg = <-c1ReceivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c2 test"), dataMessage.Body)
+	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
 
-	recvMsg = <-c2.client.receivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.Type)
-	require.NoError(t, proto.Unmarshal(recvMsg.RawMessage, &dataMessage))
-	require.NoError(t, proto.Unmarshal(dataMessage.Body, &profileData))
-	require.Equal(t, protocol.Category_PROFILE, profileData.Category)
-	require.Equal(t, c1.alias, dataMessage.FromAlias)
+	recvMsg = <-c2ReceivedReliable
+	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
+	require.Equal(t, []byte("c1 test"), dataMessage.Body)
+	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
 
 	log.Println("TEST END")
 }

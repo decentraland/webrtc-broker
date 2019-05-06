@@ -5,7 +5,7 @@ require (
 	github.com/gorilla/websocket v1.4.0
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/pion/datachannel v1.4.0
-	github.com/pion/ice v0.2.6-0.20190503134358-3595da5d93be // indirect
+	github.com/pion/ice v0.2.6-0.20190504234615-695fb1a94626 // indirect
 	github.com/pion/logging v0.2.1
 	github.com/pion/webrtc/v2 v2.0.7
 	github.com/segmentio/ksuid v1.0.2

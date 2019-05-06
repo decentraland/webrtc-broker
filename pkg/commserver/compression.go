@@ -1,41 +1,17 @@
-package utils
+package commserver
 
 import (
 	"bytes"
 	"compress/gzip"
 	"io/ioutil"
-	"time"
 )
-
-func NowMs() float64 {
-	return Milliseconds(time.Now())
-}
-
-func Milliseconds(t time.Time) float64 {
-	return float64(t.UnixNano() / int64(time.Millisecond))
-}
-
-func Max(a int, b int) int {
-	if a > b {
-		return a
-	}
-
-	return b
-}
-
-func Min(a int, b int) int {
-	if a < b {
-		return a
-	}
-
-	return b
-}
 
 type ZipCompression interface {
 	Zip(plain []byte) ([]byte, error)
 	Unzip(zipped []byte) ([]byte, error)
 }
 
+// GzipCompression compressor for gzip format
 type GzipCompression struct{}
 
 func (g *GzipCompression) Zip(plain []byte) ([]byte, error) {

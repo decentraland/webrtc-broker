@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
-	"github.com/decentraland/webrtc-broker/internal/utils"
 	"github.com/decentraland/webrtc-broker/internal/webrtc"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -42,7 +41,7 @@ func makeTestServicesWithWebRtc(t *testing.T, webRtc *MockWebRtc) services {
 		Marshaller: &protocol.Marshaller{},
 		WebRtc:     webRtc,
 		Log:        logrus.New(),
-		Zipper:     &utils.GzipCompression{},
+		Zipper:     &GzipCompression{},
 	}
 	return services
 }

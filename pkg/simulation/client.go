@@ -5,57 +5,80 @@ import (
 	"log"
 	"time"
 
-	"github.com/decentraland/webrtc-broker/internal/utils"
+	"github.com/decentraland/webrtc-broker/internal/logging"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
 	"github.com/pion/datachannel"
-	pionlogging "github.com/pion/logging"
-	"github.com/pion/webrtc/v2"
-	"github.com/sirupsen/logrus"
+	pion "github.com/pion/webrtc/v2"
 )
 
 const (
 	writeWait = 60 * time.Second
 )
 
-var webRtcConfig = webrtc.Configuration{
-	ICEServers: []webrtc.ICEServer{
-		{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		},
-	},
-}
-
-type WorldData struct {
-	MyAlias          uint64
+type peerData struct {
+	Alias            uint64
 	AvailableServers []uint64
 }
 
-type ReceivedMessage struct {
-	Type       protocol.MessageType
-	RawMessage []byte
+// Config is the client config
+type Config struct {
+	ICEServers        []pion.ICEServer
+	Auth              authentication.Authentication
+	AuthMethod        string
+	TrackStats        bool
+	OnMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
+	CoordinatorURL    string
 }
 
+// Client represents a peer with role CLIENT
 type Client struct {
-	id                 string
-	coordinatorURL     string
-	coordinator        *websocket.Conn
-	conn               *webrtc.PeerConnection
-	sendReliable       chan []byte
-	sendUnreliable     chan []byte
-	receivedReliable   chan ReceivedMessage
-	receivedUnreliable chan ReceivedMessage
-	authMessage        chan []byte
+	iceServers        []pion.ICEServer
+	onMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
+
+	coordinatorURL string
+	coordinator    *websocket.Conn
+	conn           *pion.PeerConnection
+	SendReliable   chan []byte
+	SendUnreliable chan []byte
+	authMessage    chan []byte
 
 	coordinatorWriteQueue chan []byte
 	stopReliableQueue     chan bool
 	stopUnreliableQueue   chan bool
-	worldData             chan WorldData
+	peerData              chan peerData
 	topics                map[string]bool
 }
 
-func encodeTopicSubscriptionMessage(topics map[string]bool) ([]byte, error) {
+// MakeClient creates a new client
+func MakeClient(config *Config) *Client {
+	url, err := config.Auth.GenerateAuthURL(config.AuthMethod, config.CoordinatorURL, protocol.Role_CLIENT)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	c := &Client{
+		iceServers:            config.ICEServers,
+		onMessageReceived:     config.OnMessageReceived,
+		coordinatorURL:        url,
+		authMessage:           make(chan []byte),
+		SendReliable:          make(chan []byte, 256),
+		SendUnreliable:        make(chan []byte, 256),
+		stopReliableQueue:     make(chan bool),
+		stopUnreliableQueue:   make(chan bool),
+		peerData:              make(chan peerData),
+		topics:                make(map[string]bool),
+		coordinatorWriteQueue: make(chan []byte, 256),
+	}
+
+	return c
+}
+
+// SendTopicSubscriptionMessage sends a topic subscription message to the comm server
+func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error {
 	buffer := bytes.Buffer{}
 
 	i := 0
@@ -65,13 +88,13 @@ func encodeTopicSubscriptionMessage(topics map[string]bool) ([]byte, error) {
 		if i != last {
 			buffer.WriteString(" ")
 		}
-		i += 1
+		i++
 	}
 
-	gzip := utils.GzipCompression{}
+	gzip := commserver.GzipCompression{}
 	encodedTopics, err := gzip.Zip(buffer.Bytes())
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	message := &protocol.TopicSubscriptionMessage{
@@ -82,213 +105,24 @@ func encodeTopicSubscriptionMessage(topics map[string]bool) ([]byte, error) {
 
 	bytes, err := proto.Marshal(message)
 	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
-}
-
-func encodeTopicMessage(topic string, data proto.Message) ([]byte, error) {
-	body, err := proto.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-
-	msg := &protocol.TopicMessage{
-		Type:  protocol.MessageType_TOPIC,
-		Topic: topic,
-		Body:  body,
-	}
-
-	bytes, err := proto.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
-}
-
-func encodeAuthMessage(method string, role protocol.Role, data proto.Message) ([]byte, error) {
-	authMessage := protocol.AuthMessage{
-		Type:   protocol.MessageType_AUTH,
-		Method: method,
-		Role:   role,
-	}
-
-	bytes, err := proto.Marshal(&authMessage)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
-}
-
-func MakeClient(id string, coordinatorURL string) *Client {
-	c := &Client{
-		id:                    id,
-		coordinatorURL:        coordinatorURL,
-		authMessage:           make(chan []byte),
-		sendReliable:          make(chan []byte, 256),
-		sendUnreliable:        make(chan []byte, 256),
-		stopReliableQueue:     make(chan bool),
-		stopUnreliableQueue:   make(chan bool),
-		worldData:             make(chan WorldData),
-		topics:                make(map[string]bool),
-		coordinatorWriteQueue: make(chan []byte, 256),
-	}
-
-	go c.CoordinatorWritePump()
-	return c
-}
-
-func (client *Client) CoordinatorWritePump() {
-	defer func() {
-		client.coordinator.Close()
-	}()
-
-	for {
-		select {
-		case bytes, ok := <-client.coordinatorWriteQueue:
-			client.coordinator.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				log.Println("channel closed")
-				return
-			}
-
-			if err := client.coordinator.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-				log.Fatal("write coordinator message", err)
-			}
-		}
-	}
-}
-
-func (client *Client) startCoordination() error {
-	c, _, err := websocket.DefaultDialer.Dial(client.coordinatorURL, nil)
-	if err != nil {
 		return err
 	}
 
-	client.coordinator = c
-	defer c.Close()
-
-	header := protocol.CoordinatorMessage{}
-	for {
-		_, bytes, err := c.ReadMessage()
-		if err != nil {
-			log.Println("read:", err)
-			return err
-		}
-
-		if err := proto.Unmarshal(bytes, &header); err != nil {
-			log.Println("Failed to load:", err)
-			continue
-		}
-
-		msgType := header.GetType()
-
-		switch msgType {
-		case protocol.MessageType_WELCOME:
-			welcomeMessage := protocol.WelcomeMessage{}
-			if err := proto.Unmarshal(bytes, &welcomeMessage); err != nil {
-				log.Fatal("Failed to decode welcome message:", err)
-			}
-
-			if len(welcomeMessage.AvailableServers) == 0 {
-				log.Fatal("no server available to connect")
-			}
-
-			client.worldData <- WorldData{
-				MyAlias:          welcomeMessage.Alias,
-				AvailableServers: welcomeMessage.AvailableServers,
-			}
-		case protocol.MessageType_WEBRTC_OFFER:
-			webRtcMessage := &protocol.WebRtcMessage{}
-			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
-				return err
-			}
-
-			log.Println("offer received from: ", webRtcMessage.FromAlias)
-
-			offer := webrtc.SessionDescription{
-				Type: webrtc.SDPTypeOffer,
-				SDP:  webRtcMessage.Sdp,
-			}
-
-			if err := client.conn.SetRemoteDescription(offer); err != nil {
-				log.Fatal("error setting remote description", err)
-			}
-
-			answer, err := client.conn.CreateAnswer(nil)
-			if err != nil {
-				log.Fatal("error creating webrtc answer", err)
-			}
-
-			err = client.conn.SetLocalDescription(answer)
-			if err != nil {
-				log.Fatal("error setting local description", err)
-			}
-
-			answerWebRtcMessage := &protocol.WebRtcMessage{
-				Type:    protocol.MessageType_WEBRTC_ANSWER,
-				Sdp:     answer.SDP,
-				ToAlias: webRtcMessage.FromAlias,
-			}
-			bytes, err := proto.Marshal(answerWebRtcMessage)
-			if err != nil {
-				log.Fatal("encode webrtc answer message failed", err)
-			}
-
-			client.coordinatorWriteQueue <- bytes
-		}
-	}
+	client.SendReliable <- bytes
+	return nil
 }
 
-type LogrusLevelLogger struct {
-	log       *logrus.Logger
-	peerAlias uint64
-}
-
-func (lll *LogrusLevelLogger) Trace(msg string) { lll.log.WithField("peer", lll.peerAlias).Trace(msg) }
-func (lll *LogrusLevelLogger) Error(msg string) { lll.log.WithField("peer", lll.peerAlias).Error(msg) }
-func (lll *LogrusLevelLogger) Debug(msg string) { lll.log.WithField("peer", lll.peerAlias).Debug(msg) }
-func (lll *LogrusLevelLogger) Info(msg string)  { lll.log.WithField("peer", lll.peerAlias).Info(msg) }
-func (lll *LogrusLevelLogger) Warn(msg string)  { lll.log.WithField("peer", lll.peerAlias).Warn(msg) }
-
-func (lll *LogrusLevelLogger) Tracef(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Tracef(format, args...)
-}
-func (lll *LogrusLevelLogger) Debugf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Debugf(format, args...)
-}
-func (lll *LogrusLevelLogger) Infof(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Infof(format, args...)
-}
-func (lll *LogrusLevelLogger) Warnf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Warnf(format, args...)
-}
-func (lll *LogrusLevelLogger) Errorf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Errorf(format, args...)
-}
-
-type PionSimulationLoggingFactory struct {
-	PeerAlias uint64
-}
-
-func (f *PionSimulationLoggingFactory) NewLogger(scope string) pionlogging.LeveledLogger {
-	log := logrus.New()
-	log.SetLevel(logrus.ErrorLevel)
-	return &LogrusLevelLogger{log: log, peerAlias: f.PeerAlias}
-}
-
-func (client *Client) connect(alias uint64, serverAlias uint64) error {
+// Connect connect to specified server
+func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	log.Println("client connect()")
 
-	s := webrtc.SettingEngine{}
+	s := pion.SettingEngine{}
 	s.DetachDataChannels()
-	s.LoggerFactory = &PionSimulationLoggingFactory{PeerAlias: alias}
+	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: alias}
 
-	api := webrtc.NewAPI(webrtc.WithSettingEngine(s))
+	api := pion.NewAPI(pion.WithSettingEngine(s))
 
+	webRtcConfig := pion.Configuration{ICEServers: client.iceServers}
 	conn, err := api.NewPeerConnection(webRtcConfig)
 	if err != nil {
 		return err
@@ -303,24 +137,16 @@ func (client *Client) connect(alias uint64, serverAlias uint64) error {
 	}
 	client.coordinatorWriteQueue <- bytes
 
-	conn.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
+	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
 		log.Println("ICE Connection State has changed: ", connectionState.String())
-		if connectionState == webrtc.ICEConnectionStateDisconnected {
+		if connectionState == pion.ICEConnectionStateDisconnected {
 			conn.Close()
 		}
 	})
 
-	conn.OnDataChannel(func(d *webrtc.DataChannel) {
+	conn.OnDataChannel(func(d *pion.DataChannel) {
 
 		readPump := func(client *Client, c datachannel.Reader, reliable bool) {
-			var received chan ReceivedMessage
-
-			if reliable {
-				received = client.receivedReliable
-			} else {
-				received = client.receivedUnreliable
-			}
-
 			header := protocol.WorldCommMessage{}
 			buffer := make([]byte, 1024)
 			for {
@@ -343,8 +169,8 @@ func (client *Client) connect(alias uint64, serverAlias uint64) error {
 					continue
 				}
 
-				if received != nil {
-					received <- ReceivedMessage{Type: header.Type, RawMessage: bytes}
+				if client.onMessageReceived != nil {
+					client.onMessageReceived(reliable, header.Type, bytes)
 				}
 			}
 		}
@@ -354,7 +180,7 @@ func (client *Client) connect(alias uint64, serverAlias uint64) error {
 			var stopQueue chan bool
 			if reliable {
 				stopQueue = client.stopReliableQueue
-				messagesQueue = client.sendReliable
+				messagesQueue = client.SendReliable
 				bytes := <-client.authMessage
 				_, err := c.WriteDataChannel(bytes, false)
 				if err != nil {
@@ -363,7 +189,7 @@ func (client *Client) connect(alias uint64, serverAlias uint64) error {
 				}
 			} else {
 				stopQueue = client.stopUnreliableQueue
-				messagesQueue = client.sendUnreliable
+				messagesQueue = client.SendUnreliable
 			}
 			for {
 				select {
@@ -417,13 +243,132 @@ func (client *Client) connect(alias uint64, serverAlias uint64) error {
 	return nil
 }
 
-func (client *Client) sendTopicSubscriptionMessage(topics map[string]bool) error {
-	bytes, err := encodeTopicSubscriptionMessage(topics)
+// Start starts a new client
+func Start(config *Config) *Client {
+	client := MakeClient(config)
 
+	go func() {
+		log.Fatal(client.startCoordination())
+	}()
+
+	peerData := <-client.peerData
+
+	log.Println("my alias is", peerData.Alias)
+
+	if err := client.Connect(peerData.Alias, peerData.AvailableServers[0]); err != nil {
+		log.Fatal(err)
+	}
+
+	authMessage, err := config.Auth.GenerateAuthMessage(config.AuthMethod, protocol.Role_CLIENT)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	bytes, err := proto.Marshal(authMessage)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	client.authMessage <- bytes
+
+	return client
+}
+
+func (client *Client) startCoordination() error {
+	c, _, err := websocket.DefaultDialer.Dial(client.coordinatorURL, nil)
 	if err != nil {
 		return err
 	}
 
-	client.sendReliable <- bytes
-	return nil
+	client.coordinator = c
+	defer c.Close()
+
+	go func() {
+		for {
+			select {
+			case bytes, ok := <-client.coordinatorWriteQueue:
+				c.SetWriteDeadline(time.Now().Add(writeWait))
+				if !ok {
+					log.Println("channel closed")
+					return
+				}
+
+				if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
+					log.Fatal("write coordinator message", err)
+				}
+			}
+		}
+	}()
+
+	header := protocol.CoordinatorMessage{}
+	for {
+		_, bytes, err := c.ReadMessage()
+		if err != nil {
+			log.Println("read:", err)
+			return err
+		}
+
+		if err := proto.Unmarshal(bytes, &header); err != nil {
+			log.Println("Failed to load:", err)
+			continue
+		}
+
+		msgType := header.GetType()
+
+		switch msgType {
+		case protocol.MessageType_WELCOME:
+			welcomeMessage := protocol.WelcomeMessage{}
+			if err := proto.Unmarshal(bytes, &welcomeMessage); err != nil {
+				log.Fatal("Failed to decode welcome message:", err)
+			}
+
+			if len(welcomeMessage.AvailableServers) == 0 {
+				log.Fatal("no server available to connect")
+			}
+
+			client.peerData <- peerData{
+				Alias:            welcomeMessage.Alias,
+				AvailableServers: welcomeMessage.AvailableServers,
+			}
+		case protocol.MessageType_WEBRTC_OFFER:
+			webRtcMessage := &protocol.WebRtcMessage{}
+			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
+				return err
+
+			}
+
+			log.Println("offer received from: ", webRtcMessage.FromAlias)
+
+			offer := pion.SessionDescription{
+				Type: pion.SDPTypeOffer,
+				SDP:  webRtcMessage.Sdp,
+			}
+
+			if err := client.conn.SetRemoteDescription(offer); err != nil {
+				log.Fatal("error setting remote description", err)
+			}
+
+			answer, err := client.conn.CreateAnswer(nil)
+			if err != nil {
+				log.Fatal("error creating webrtc answer", err)
+			}
+
+			err = client.conn.SetLocalDescription(answer)
+			if err != nil {
+				log.Fatal("error setting local description", err)
+			}
+
+			answerWebRtcMessage := &protocol.WebRtcMessage{
+				Type:    protocol.MessageType_WEBRTC_ANSWER,
+				Sdp:     answer.SDP,
+				ToAlias: webRtcMessage.FromAlias,
+			}
+			bytes, err := proto.Marshal(answerWebRtcMessage)
+			if err != nil {
+				log.Fatal("encode webrtc answer message failed", err)
+			}
+
+			client.coordinatorWriteQueue <- bytes
+		}
+	}
 }

@@ -4,23 +4,19 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"time"
 
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
+	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/decentraland/webrtc-broker/pkg/simulation"
+	"github.com/golang/protobuf/proto"
 )
 
-type V3 = simulation.V3
-
 func main() {
-	addrP := flag.String("worldUrl", "ws://localhost:9090/connect", "")
-	centerXP := flag.Int("centerX", 0, "")
-	centerYP := flag.Int("centerY", 0, "")
-	radiusP := flag.Int("radius", 3, "radius (in parcels) from the center")
-	subscribeP := flag.Bool("subscribe", false, "subscribe to the position and profile topics of the comm area")
-	nBotsP := flag.Int("n", 5, "number of bots")
+	addr := flag.String("coordinatorURL", "ws://localhost:9090/connect", "Coordinator URL")
+	nBots := flag.Int("n", 5, "number of bots")
 	authMethodP := flag.String("authMethod", "noop", "")
 	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
 	trackStats := flag.Bool("trackStats", false, "")
@@ -32,11 +28,6 @@ func main() {
 	auth := authentication.Make()
 	auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
 
-	addr := *addrP
-	centerX := *centerXP
-	centerY := *centerYP
-	radius := *radiusP
-	subscribe := *subscribeP
 	authMethod := *authMethodP
 
 	if *profilerPort != -1 {
@@ -47,27 +38,96 @@ func main() {
 		}()
 	}
 
-	for i := 0; i < *nBotsP; i += 1 {
-		var checkpoints [6]V3
+	for i := 0; i < *nBots; i++ {
+		go func() {
+			config := simulation.Config{
+				Auth:           auth,
+				AuthMethod:     authMethod,
+				CoordinatorURL: *addr,
+			}
 
-		for i := 0; i < len(checkpoints); i += 1 {
-			p := &checkpoints[i]
+			if *trackStats {
+				trackCh := make(chan []byte, 256)
+				config.OnMessageReceived = func(reliable bool, msgType protocol.MessageType, raw []byte) {
+					if !reliable && msgType == protocol.MessageType_DATA {
+						trackCh <- raw
+					}
+				}
 
-			p.X = float64(centerX + rand.Intn(10)*radius*2 - radius)
-			p.Y = 1.6
-			p.Z = float64(centerY + rand.Intn(10)*radius*2 - radius)
-		}
+				go func() {
+					peers := make(map[uint64]*simulation.Stats)
+					dataMessage := protocol.DataMessage{}
 
-		opts := simulation.BotOptions{
-			Auth:                      auth,
-			AuthMethod:                authMethod,
-			Checkpoints:               checkpoints[:],
-			DurationMs:                10000,
-			SubscribeToPositionTopics: subscribe,
-			TrackStats:                *trackStats,
-		}
+					onMessage := func(rawMsg []byte) {
+						if err := proto.Unmarshal(rawMsg, &dataMessage); err != nil {
+							log.Println("error unmarshalling data message")
+							return
+						}
 
-		go simulation.StartBot(addr, opts)
+						alias := dataMessage.FromAlias
+						stats := peers[alias]
+
+						if stats == nil {
+							stats = &simulation.Stats{}
+							peers[alias] = stats
+						}
+
+						stats.Seen(time.Now())
+					}
+
+					reportTicker := time.NewTicker(30 * time.Second)
+					defer reportTicker.Stop()
+
+					for {
+						select {
+						case rawMsg := <-trackCh:
+							onMessage(rawMsg)
+
+							n := len(trackCh)
+							for i := 0; i < n; i++ {
+								rawMsg = <-trackCh
+								onMessage(rawMsg)
+							}
+						case <-reportTicker.C:
+							log.Println("Avg duration between position messages")
+							for alias, stats := range peers {
+								fmt.Printf("%d: %f ms\n", alias, stats.Avg())
+
+								if time.Since(stats.LastSeen).Seconds() > 1 {
+									delete(peers, alias)
+								}
+							}
+						}
+
+					}
+				}()
+			}
+
+			client := simulation.Start(&config)
+
+			msg := protocol.TopicMessage{
+				Type:  protocol.MessageType_TOPIC,
+				Topic: "test",
+				Body:  make([]byte, 32),
+			}
+
+			bytes, err := proto.Marshal(&msg)
+			if err != nil {
+				log.Fatal("encode failed", err)
+			}
+
+			client.SendTopicSubscriptionMessage(map[string]bool{"test": true})
+
+			writeTicker := time.NewTicker(100 * time.Millisecond)
+			defer writeTicker.Stop()
+
+			for {
+				select {
+				case <-writeTicker.C:
+					client.SendUnreliable <- bytes
+				}
+			}
+		}()
 	}
 
 	select {}
