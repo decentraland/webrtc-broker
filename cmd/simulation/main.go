@@ -12,6 +12,7 @@ import (
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/decentraland/webrtc-broker/pkg/simulation"
 	"github.com/golang/protobuf/proto"
+	pion "github.com/pion/webrtc/v2"
 )
 
 func main() {
@@ -44,6 +45,11 @@ func main() {
 				Auth:           auth,
 				AuthMethod:     authMethod,
 				CoordinatorURL: *addr,
+				ICEServers: []pion.ICEServer{
+					{
+						URLs: []string{"stun:stun.l.google.com:19302"},
+					},
+				},
 			}
 
 			if *trackStats {

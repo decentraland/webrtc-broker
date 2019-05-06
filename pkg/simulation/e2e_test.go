@@ -194,7 +194,7 @@ func start(t *testing.T, client *Client) peerData {
 		require.NoError(t, client.startCoordination())
 	}()
 
-	return <-client.peerData
+	return <-client.PeerData
 }
 
 type recvMessage struct {
@@ -378,8 +378,8 @@ func TestE2E(t *testing.T) {
 	require.False(t, comm2Snapshot.Peers[c2Data.Alias].Topics["test"])
 
 	printTitle("Testing webrtc connection close")
-	c2.stopReliableQueue <- true
-	c2.stopUnreliableQueue <- true
+	c2.StopReliableQueue <- true
+	c2.StopUnreliableQueue <- true
 	go c2.conn.Close()
 	c2.conn = nil
 	c2.Connect(c2Data.Alias, comm1Snapshot.Alias)

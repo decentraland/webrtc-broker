@@ -29,7 +29,6 @@ type Config struct {
 	ICEServers        []pion.ICEServer
 	Auth              authentication.Authentication
 	AuthMethod        string
-	TrackStats        bool
 	OnMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
 	CoordinatorURL    string
 }
@@ -39,18 +38,17 @@ type Client struct {
 	iceServers        []pion.ICEServer
 	onMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
 
-	coordinatorURL string
-	coordinator    *websocket.Conn
-	conn           *pion.PeerConnection
-	SendReliable   chan []byte
-	SendUnreliable chan []byte
-	authMessage    chan []byte
+	SendReliable        chan []byte
+	SendUnreliable      chan []byte
+	StopReliableQueue   chan bool
+	StopUnreliableQueue chan bool
+	PeerData            chan peerData
 
+	coordinatorURL        string
+	coordinator           *websocket.Conn
+	conn                  *pion.PeerConnection
+	authMessage           chan []byte
 	coordinatorWriteQueue chan []byte
-	stopReliableQueue     chan bool
-	stopUnreliableQueue   chan bool
-	peerData              chan peerData
-	topics                map[string]bool
 }
 
 // MakeClient creates a new client
@@ -67,10 +65,9 @@ func MakeClient(config *Config) *Client {
 		authMessage:           make(chan []byte),
 		SendReliable:          make(chan []byte, 256),
 		SendUnreliable:        make(chan []byte, 256),
-		stopReliableQueue:     make(chan bool),
-		stopUnreliableQueue:   make(chan bool),
-		peerData:              make(chan peerData),
-		topics:                make(map[string]bool),
+		StopReliableQueue:     make(chan bool),
+		StopUnreliableQueue:   make(chan bool),
+		PeerData:              make(chan peerData),
 		coordinatorWriteQueue: make(chan []byte, 256),
 	}
 
@@ -179,7 +176,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 			var messagesQueue chan []byte
 			var stopQueue chan bool
 			if reliable {
-				stopQueue = client.stopReliableQueue
+				stopQueue = client.StopReliableQueue
 				messagesQueue = client.SendReliable
 				bytes := <-client.authMessage
 				_, err := c.WriteDataChannel(bytes, false)
@@ -188,7 +185,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 					return
 				}
 			} else {
-				stopQueue = client.stopUnreliableQueue
+				stopQueue = client.StopUnreliableQueue
 				messagesQueue = client.SendUnreliable
 			}
 			for {
@@ -251,7 +248,7 @@ func Start(config *Config) *Client {
 		log.Fatal(client.startCoordination())
 	}()
 
-	peerData := <-client.peerData
+	peerData := <-client.PeerData
 
 	log.Println("my alias is", peerData.Alias)
 
@@ -326,7 +323,7 @@ func (client *Client) startCoordination() error {
 				log.Fatal("no server available to connect")
 			}
 
-			client.peerData <- peerData{
+			client.PeerData <- peerData{
 				Alias:            welcomeMessage.Alias,
 				AvailableServers: welcomeMessage.AvailableServers,
 			}
