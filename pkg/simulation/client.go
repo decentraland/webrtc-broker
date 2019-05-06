@@ -144,7 +144,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	conn.OnDataChannel(func(d *pion.DataChannel) {
 
 		readPump := func(client *Client, c datachannel.Reader, reliable bool) {
-			header := protocol.WorldCommMessage{}
+			header := protocol.MessageHeader{}
 			buffer := make([]byte, 1024)
 			for {
 				n, _, err := c.ReadDataChannel(buffer)

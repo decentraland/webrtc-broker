@@ -1,4 +1,4 @@
-package commproto
+package protocol
 
 import "github.com/golang/protobuf/proto"
 

@@ -479,7 +479,7 @@ func initPeer(state *State, alias uint64) (*peer, error) {
 			return
 		}
 
-		header := protocol.WorldCommMessage{}
+		header := protocol.MessageHeader{}
 		buffer := make([]byte, maxWorldCommMessageSize)
 		n, err := d.Read(buffer)
 

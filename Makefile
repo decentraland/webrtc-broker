@@ -11,7 +11,7 @@ escape:
 	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/coordinator
 
 compile-protocol:
-	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./commproto.proto
+	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./broker.proto
 
 test: build
 	go test -race $(TEST_FLAGS) \

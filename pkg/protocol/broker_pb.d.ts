@@ -1,5 +1,5 @@
-// package: 
-// file: commproto.proto
+// package: protocol
+// file: broker.proto
 
 import * as jspb from "google-protobuf";
 
@@ -113,21 +113,21 @@ export namespace WebRtcMessage {
   }
 }
 
-export class WorldCommMessage extends jspb.Message {
+export class MessageHeader extends jspb.Message {
   getType(): MessageType;
   setType(value: MessageType): void;
 
   serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): WorldCommMessage.AsObject;
-  static toObject(includeInstance: boolean, msg: WorldCommMessage): WorldCommMessage.AsObject;
+  toObject(includeInstance?: boolean): MessageHeader.AsObject;
+  static toObject(includeInstance: boolean, msg: MessageHeader): MessageHeader.AsObject;
   static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
   static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: WorldCommMessage, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): WorldCommMessage;
-  static deserializeBinaryFromReader(message: WorldCommMessage, reader: jspb.BinaryReader): WorldCommMessage;
+  static serializeBinaryToWriter(message: MessageHeader, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): MessageHeader;
+  static deserializeBinaryFromReader(message: MessageHeader, reader: jspb.BinaryReader): MessageHeader;
 }
 
-export namespace WorldCommMessage {
+export namespace MessageHeader {
   export type AsObject = {
     type: MessageType,
   }
@@ -285,151 +285,10 @@ export namespace AuthMessage {
   }
 }
 
-export class DataHeader extends jspb.Message {
-  getCategory(): Category;
-  setCategory(value: Category): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): DataHeader.AsObject;
-  static toObject(includeInstance: boolean, msg: DataHeader): DataHeader.AsObject;
-  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: DataHeader, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): DataHeader;
-  static deserializeBinaryFromReader(message: DataHeader, reader: jspb.BinaryReader): DataHeader;
-}
-
-export namespace DataHeader {
-  export type AsObject = {
-    category: Category,
-  }
-}
-
-export class PositionData extends jspb.Message {
-  getCategory(): Category;
-  setCategory(value: Category): void;
-
-  getTime(): number;
-  setTime(value: number): void;
-
-  getPositionX(): number;
-  setPositionX(value: number): void;
-
-  getPositionY(): number;
-  setPositionY(value: number): void;
-
-  getPositionZ(): number;
-  setPositionZ(value: number): void;
-
-  getRotationX(): number;
-  setRotationX(value: number): void;
-
-  getRotationY(): number;
-  setRotationY(value: number): void;
-
-  getRotationZ(): number;
-  setRotationZ(value: number): void;
-
-  getRotationW(): number;
-  setRotationW(value: number): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): PositionData.AsObject;
-  static toObject(includeInstance: boolean, msg: PositionData): PositionData.AsObject;
-  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: PositionData, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): PositionData;
-  static deserializeBinaryFromReader(message: PositionData, reader: jspb.BinaryReader): PositionData;
-}
-
-export namespace PositionData {
-  export type AsObject = {
-    category: Category,
-    time: number,
-    positionX: number,
-    positionY: number,
-    positionZ: number,
-    rotationX: number,
-    rotationY: number,
-    rotationZ: number,
-    rotationW: number,
-  }
-}
-
-export class ProfileData extends jspb.Message {
-  getCategory(): Category;
-  setCategory(value: Category): void;
-
-  getTime(): number;
-  setTime(value: number): void;
-
-  getAvatarType(): string;
-  setAvatarType(value: string): void;
-
-  getDisplayName(): string;
-  setDisplayName(value: string): void;
-
-  getPublicKey(): string;
-  setPublicKey(value: string): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): ProfileData.AsObject;
-  static toObject(includeInstance: boolean, msg: ProfileData): ProfileData.AsObject;
-  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: ProfileData, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): ProfileData;
-  static deserializeBinaryFromReader(message: ProfileData, reader: jspb.BinaryReader): ProfileData;
-}
-
-export namespace ProfileData {
-  export type AsObject = {
-    category: Category,
-    time: number,
-    avatarType: string,
-    displayName: string,
-    publicKey: string,
-  }
-}
-
-export class ChatData extends jspb.Message {
-  getCategory(): Category;
-  setCategory(value: Category): void;
-
-  getTime(): number;
-  setTime(value: number): void;
-
-  getMessageId(): string;
-  setMessageId(value: string): void;
-
-  getText(): string;
-  setText(value: string): void;
-
-  serializeBinary(): Uint8Array;
-  toObject(includeInstance?: boolean): ChatData.AsObject;
-  static toObject(includeInstance: boolean, msg: ChatData): ChatData.AsObject;
-  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-  static serializeBinaryToWriter(message: ChatData, writer: jspb.BinaryWriter): void;
-  static deserializeBinary(bytes: Uint8Array): ChatData;
-  static deserializeBinaryFromReader(message: ChatData, reader: jspb.BinaryReader): ChatData;
-}
-
-export namespace ChatData {
-  export type AsObject = {
-    category: Category,
-    time: number,
-    messageId: string,
-    text: string,
-  }
-}
-
 export enum MessageType {
   UNKNOWN_MESSAGE_TYPE = 0,
   WELCOME = 1,
   CONNECT = 2,
-  WEBRTC_SUPPORTED = 3,
   WEBRTC_OFFER = 4,
   WEBRTC_ANSWER = 5,
   WEBRTC_ICE_CANDIDATE = 6,
@@ -450,12 +309,5 @@ export enum Format {
   UNKNOWN_FORMAT = 0,
   PLAIN = 1,
   GZIP = 2,
-}
-
-export enum Category {
-  UNKNOWN = 0,
-  POSITION = 1,
-  PROFILE = 2,
-  CHAT = 3,
 }
 

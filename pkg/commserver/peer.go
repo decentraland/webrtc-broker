@@ -58,7 +58,7 @@ func (p *peer) Close() {
 
 func (p *peer) readReliablePump() {
 	marshaller := p.services.Marshaller
-	header := protocol.WorldCommMessage{}
+	header := protocol.MessageHeader{}
 
 	if p.reliableBuffer == nil {
 		p.reliableBuffer = make([]byte, maxWorldCommMessageSize)
@@ -112,7 +112,7 @@ func (p *peer) readReliablePump() {
 func (p *peer) readUnreliablePump() {
 	marshaller := p.services.Marshaller
 
-	header := protocol.WorldCommMessage{}
+	header := protocol.MessageHeader{}
 
 	if p.unreliableBuffer == nil {
 		p.unreliableBuffer = make([]byte, maxWorldCommMessageSize)
