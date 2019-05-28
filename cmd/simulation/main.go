@@ -18,7 +18,6 @@ import (
 func main() {
 	addr := flag.String("coordinatorURL", "ws://localhost:9090/connect", "Coordinator URL")
 	nBots := flag.Int("n", 5, "number of bots")
-	authMethodP := flag.String("authMethod", "noop", "")
 	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
 	trackStats := flag.Bool("trackStats", false, "")
 
@@ -26,10 +25,7 @@ func main() {
 
 	log.Println("running random simulation")
 
-	auth := authentication.Make()
-	auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
-
-	authMethod := *authMethodP
+	auth := authentication.NoopAuthenticator{}
 
 	if *profilerPort != -1 {
 		go func() {
@@ -42,8 +38,7 @@ func main() {
 	for i := 0; i < *nBots; i++ {
 		go func() {
 			config := simulation.Config{
-				Auth:           auth,
-				AuthMethod:     authMethod,
+				Auth:           &auth,
 				CoordinatorURL: *addr,
 				ICEServers: []pion.ICEServer{
 					{

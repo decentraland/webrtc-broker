@@ -258,9 +258,6 @@ export class AuthMessage extends jspb.Message {
   getRole(): Role;
   setRole(value: Role): void;
 
-  getMethod(): string;
-  setMethod(value: string): void;
-
   getBody(): Uint8Array | string;
   getBody_asU8(): Uint8Array;
   getBody_asB64(): string;
@@ -280,7 +277,6 @@ export namespace AuthMessage {
   export type AsObject = {
     type: MessageType,
     role: Role,
-    method: string,
     body: Uint8Array | string,
   }
 }

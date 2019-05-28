@@ -9,35 +9,136 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
-	"github.com/decentraland/webrtc-broker/internal/webrtc"
-	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
-type MockAuthenticator = _testing.MockAuthenticator
-type MockReadWriteCloser = _testing.MockReadWriteCloser
 type MockWebsocket = _testing.MockWebsocket
-type MockWebRtc = _testing.MockWebRtc
 
-func makeMockWebsocket() *MockWebsocket {
-	return _testing.MakeMockWebsocket()
+type mockServerAuthenticator struct{ mock.Mock }
+
+func (m *mockServerAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, error) {
+	args := m.Called(role, bytes)
+	return args.Bool(0), args.Error(1)
 }
 
-func makeDefaultMockWebRtc() *MockWebRtc {
-	mockWebRtc := &MockWebRtc{}
+func (m *mockServerAuthenticator) GenerateServerAuthMessage() (*protocol.AuthMessage, error) {
+	args := m.Called()
+	return args.Get(0).(*protocol.AuthMessage), args.Error(1)
+}
+
+func (m *mockServerAuthenticator) GenerateServerConnectURL(coordinatorURL string) (string, error) {
+	args := m.Called(coordinatorURL)
+	return args.String(0), args.Error(1)
+}
+
+type mockReadWriteCloser struct {
+	mock.Mock
+}
+
+func (m *mockReadWriteCloser) ReadDataChannel(p []byte) (int, bool, error) {
+	n, err := m.Read(p)
+	return n, false, err
+}
+
+func (m *mockReadWriteCloser) WriteDataChannel(p []byte, isString bool) (int, error) {
+	return m.Write(p)
+}
+
+func (m *mockReadWriteCloser) Read(p []byte) (n int, err error) {
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *mockReadWriteCloser) Write(p []byte) (n int, err error) {
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
+}
+
+func (m *mockReadWriteCloser) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+type mockWebRtc struct {
+	mock.Mock
+}
+
+func (m *mockWebRtc) newConnection(peerAlias uint64) (*PeerConnection, error) {
+	args := m.Called(peerAlias)
+	return args.Get(0).(*PeerConnection), args.Error(1)
+}
+
+func (m *mockWebRtc) createReliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
+	args := m.Called(conn)
+	return args.Get(0).(*DataChannel), args.Error(1)
+}
+
+func (m *mockWebRtc) detach(dc *DataChannel) (ReadWriteCloser, error) {
+	args := m.Called(dc)
+	return args.Get(0).(ReadWriteCloser), args.Error(1)
+}
+
+func (m *mockWebRtc) createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
+	args := m.Called(conn)
+	return args.Get(0).(*DataChannel), args.Error(1)
+}
+
+func (m *mockWebRtc) registerOpenHandler(dc *DataChannel, handler func()) {
+	m.Called(dc, handler)
+}
+
+func (m *mockWebRtc) invokeOpenHandler(dc *DataChannel) {
+	m.Called(dc)
+}
+
+func (m *mockWebRtc) createOffer(conn *PeerConnection) (string, error) {
+	args := m.Called(conn)
+	return args.String(0), args.Error(1)
+}
+
+func (m *mockWebRtc) onAnswer(conn *PeerConnection, sdp string) error {
+	args := m.Called(conn, sdp)
+	return args.Error(0)
+}
+
+func (m *mockWebRtc) onOffer(conn *PeerConnection, sdp string) (string, error) {
+	args := m.Called(conn, sdp)
+	return args.String(0), args.Error(1)
+}
+
+func (m *mockWebRtc) onIceCandidate(conn *PeerConnection, sdp string) error {
+	args := m.Called(conn, sdp)
+	return args.Error(0)
+}
+
+func (m *mockWebRtc) isClosed(conn *PeerConnection) bool {
+	args := m.Called(conn)
+	return args.Bool(0)
+}
+
+func (m *mockWebRtc) isNew(conn *PeerConnection) bool {
+	args := m.Called(conn)
+	return args.Bool(0)
+}
+
+func (m *mockWebRtc) close(conn *PeerConnection) error {
+	args := m.Called(conn)
+	return args.Error(0)
+}
+
+func makeDefaultMockWebRtc() *mockWebRtc {
+	mockWebRtc := &mockWebRtc{}
 	mockWebRtc.
-		On("Close", mock.Anything).Return(nil).Once().
-		On("Close", mock.Anything).Return(errors.New("already closed"))
+		On("close", mock.Anything).Return(nil).Once().
+		On("close", mock.Anything).Return(errors.New("already closed"))
 	return mockWebRtc
 }
 
-func makeTestServicesWithWebRtc(t *testing.T, webRtc *MockWebRtc) services {
-	auth := authentication.Make()
+func makeTestServicesWithWebRtc(t *testing.T, webRtc *mockWebRtc) services {
 	services := services{
-		Auth:       auth,
 		Marshaller: &protocol.Marshaller{},
 		WebRtc:     webRtc,
 		Log:        logrus.New(),
@@ -50,12 +151,10 @@ func makeTestServices(t *testing.T) services {
 	return makeTestServicesWithWebRtc(t, makeDefaultMockWebRtc())
 }
 
-func makeTestConfigWithWebRtc(t *testing.T, webRtc *MockWebRtc) *Config {
-	auth := authentication.Make()
+func makeTestConfigWithWebRtc(t *testing.T, auth *mockServerAuthenticator, webRtc *mockWebRtc) *Config {
 	logger := logrus.New()
 	config := &Config{
 		Auth:                    auth,
-		AuthMethod:              "testAuth",
 		EstablishSessionTimeout: 1 * time.Second,
 		WebRtc:                  webRtc,
 		Log:                     logger,
@@ -65,7 +164,7 @@ func makeTestConfigWithWebRtc(t *testing.T, webRtc *MockWebRtc) *Config {
 }
 
 func makeTestConfig(t *testing.T) *Config {
-	return makeTestConfigWithWebRtc(t, makeDefaultMockWebRtc())
+	return makeTestConfigWithWebRtc(t, nil, makeDefaultMockWebRtc())
 }
 
 func makeTestState(t *testing.T, config *Config) *State {
@@ -80,13 +179,18 @@ func makeClient(alias uint64, services services) *peer {
 		Alias:    alias,
 		conn:     &pion.PeerConnection{},
 		Topics:   make(map[string]struct{}),
+		role:     protocol.Role_CLIENT,
 	}
 }
 
 func makeServer(alias uint64, services services) *peer {
-	p := makeClient(alias, services)
-	p.isServer = true
-	return p
+	return &peer{
+		services: services,
+		Alias:    alias,
+		conn:     &pion.PeerConnection{},
+		Topics:   make(map[string]struct{}),
+		role:     protocol.Role_COMMUNICATION_SERVER,
+	}
 }
 
 func addPeer(state *State, p *peer) *peer {
@@ -117,29 +221,36 @@ func TestCoordinatorSend(t *testing.T) {
 }
 
 func TestCoordinatorReadPump(t *testing.T) {
-	setup := func() (*State, *MockWebsocket) {
+	setup := func() *State {
+		auth := &mockServerAuthenticator{}
+		auth.On("GenerateServerAuthMessage").Return(&protocol.AuthMessage{}, nil).Once()
+
 		config := makeTestConfig(t)
-		config.Auth.AddOrUpdateAuthenticator("testAuth", &MockAuthenticator{
-			GenerateAuthMessage_: func(role protocol.Role) (*protocol.AuthMessage, error) {
-				require.Equal(t, role, protocol.Role_COMMUNICATION_SERVER)
-				return &protocol.AuthMessage{}, nil
-			},
-		})
+		config.Auth = auth
 		state := makeTestState(t, config)
 
-		conn := makeMockWebsocket()
-		state.coordinator.conn = conn
-		return state, conn
+		return state
 	}
 
 	t.Run("welcome server message", func(t *testing.T) {
-		state, conn := setup()
+		state := setup()
+		conn := &MockWebsocket{}
+		state.coordinator.conn = conn
 		msg := &protocol.WelcomeMessage{
 			Type:             protocol.MessageType_WELCOME,
 			Alias:            3,
 			AvailableServers: []uint64{1, 2},
 		}
-		require.NoError(t, conn.PrepareToRead(msg))
+		encodedMsg, err := proto.Marshal(msg)
+		require.NoError(t, err)
+
+		conn.
+			On("Close").Return(nil).Once().
+			On("ReadMessage").Return(encodedMsg, nil).Once().
+			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
+			On("SetReadLimit", mock.Anything).Return(nil).Once().
+			On("SetReadDeadline", mock.Anything).Return(nil).Once().
+			On("SetPongHandler", mock.Anything).Once()
 
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
@@ -151,11 +262,22 @@ func TestCoordinatorReadPump(t *testing.T) {
 	})
 
 	t.Run("webrtc message", func(t *testing.T) {
-		state, conn := setup()
+		state := setup()
+		conn := &MockWebsocket{}
+		state.coordinator.conn = conn
 		msg := &protocol.WebRtcMessage{
 			Type: protocol.MessageType_WEBRTC_ANSWER,
 		}
-		require.NoError(t, conn.PrepareToRead(msg))
+		encodedMsg, err := proto.Marshal(msg)
+		require.NoError(t, err)
+
+		conn.
+			On("Close").Return(nil).Once().
+			On("ReadMessage").Return(encodedMsg, nil).Once().
+			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
+			On("SetReadLimit", mock.Anything).Return(nil).Once().
+			On("SetReadDeadline", mock.Anything).Return(nil).Once().
+			On("SetPongHandler", mock.Anything).Once()
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
@@ -164,12 +286,23 @@ func TestCoordinatorReadPump(t *testing.T) {
 	})
 
 	t.Run("connect message", func(t *testing.T) {
-		state, conn := setup()
+		state := setup()
+		conn := &MockWebsocket{}
+		state.coordinator.conn = conn
 		msg := &protocol.ConnectMessage{
 			Type:      protocol.MessageType_CONNECT,
 			FromAlias: 2,
 		}
-		require.NoError(t, conn.PrepareToRead(msg))
+		encodedMsg, err := proto.Marshal(msg)
+		require.NoError(t, err)
+
+		conn.
+			On("Close").Return(nil).Once().
+			On("ReadMessage").Return(encodedMsg, nil).Once().
+			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
+			On("SetReadLimit", mock.Anything).Return(nil).Once().
+			On("SetReadDeadline", mock.Anything).Return(nil).Once().
+			On("SetPongHandler", mock.Anything).Once()
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
@@ -185,23 +318,20 @@ func TestCoordinatorWritePump(t *testing.T) {
 
 	config := makeTestConfig(t)
 	state := makeTestState(t, config)
-	i := 0
-	conn := makeMockWebsocket()
-	conn.OnWrite = func(bytes []byte) {
-		require.Equal(t, bytes, msg)
-		if i == 1 {
-			state.coordinator.Close()
-			return
-		}
-		i++
-	}
+	conn := &MockWebsocket{}
+	conn.
+		On("Close").Return(nil).Once().
+		On("WriteMessage", msg).Return(nil).Once().
+		On("WriteMessage", msg).Return(errors.New("stop")).Once().
+		On("SetWriteDeadline", mock.Anything).Return(nil).Once()
+
 	state.coordinator.conn = conn
 
 	state.coordinator.send <- msg
 	state.coordinator.send <- msg
 
 	state.coordinator.writePump(state)
-	require.Equal(t, i, 1)
+	conn.AssertExpectations(t)
 }
 
 func TestTopicSubscriptions(t *testing.T) {
@@ -338,19 +468,17 @@ func TestTopicSubscriptions(t *testing.T) {
 
 type authExchangeTestConfig struct {
 	t                *testing.T
-	IsRecvAuthValid  bool
 	config           *Config
 	firstMessageRecv protocol.Message
 }
 
 type authExchangeTest struct {
-	t                    *testing.T
-	authMessageGenerated bool
-	state                *State
-	ReliableDC           *webrtc.DataChannel
-	UnreliableDC         *webrtc.DataChannel
-	ReliableRWC          *MockReadWriteCloser
-	UnreliableRWC        *MockReadWriteCloser
+	t             *testing.T
+	state         *State
+	ReliableDC    *DataChannel
+	UnreliableDC  *DataChannel
+	ReliableRWC   *mockReadWriteCloser
+	UnreliableRWC *mockReadWriteCloser
 }
 
 func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
@@ -359,17 +487,7 @@ func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
 	encodedMsg, err := proto.Marshal(config.firstMessageRecv)
 	require.NoError(config.t, err)
 
-	authenticator := &MockAuthenticator{
-		Authenticate_: func(role protocol.Role, bytes []byte) (bool, error) {
-			return config.IsRecvAuthValid, nil
-		},
-		GenerateAuthMessage_: func(protocol.Role) (*protocol.AuthMessage, error) {
-			test.authMessageGenerated = true
-			return &protocol.AuthMessage{}, nil
-		},
-	}
-
-	test.ReliableRWC = &MockReadWriteCloser{}
+	test.ReliableRWC = &mockReadWriteCloser{}
 	test.ReliableRWC.
 		On("Write", mock.Anything).Return(0, nil).
 		On("Read", mock.Anything).Run(func(args mock.Arguments) {
@@ -378,7 +496,7 @@ func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
 	}).Return(len(encodedMsg), nil).Once().
 		On("Read", mock.Anything).Return(0, errors.New("stop"))
 
-	test.UnreliableRWC = &MockReadWriteCloser{}
+	test.UnreliableRWC = &mockReadWriteCloser{}
 	test.UnreliableRWC.
 		On("Write", mock.Anything).Return(0, nil).
 		On("Read", mock.Anything).Run(func(args mock.Arguments) {
@@ -387,33 +505,31 @@ func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
 	}).Return(len(encodedMsg), nil).Once().
 		On("Read", mock.Anything).Return(0, errors.New("stop"))
 
-	config.config.Auth.AddOrUpdateAuthenticator("testAuth", authenticator)
-
 	return test
 }
 
 func TestInitPeer(t *testing.T) {
 	t.Run("if no connection is establish eventually the peer is unregistered", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		conn := &pion.PeerConnection{}
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(true).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", mock.Anything, mock.Anything).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(true).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", mock.Anything, mock.Anything).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
 		state := makeTestState(t, config)
 		defer closeState(state)
 
-		_, err := initPeer(state, 1)
+		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		p := <-state.unregisterQueue
@@ -421,12 +537,14 @@ func TestInitPeer(t *testing.T) {
 	})
 
 	t.Run("auth exchange: first message is not auth", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
-			t:               t,
-			IsRecvAuthValid: true,
-			config:          config,
+			t:      t,
+			config: config,
 			firstMessageRecv: &protocol.TopicMessage{
 				Type: protocol.MessageType_TOPIC,
 			},
@@ -441,39 +559,37 @@ func TestInitPeer(t *testing.T) {
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(false).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			reliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("RegisterOpenHandler", unreliableDC, mock.Anything).Once().
-			On("Detach", reliableDC).Return(test.ReliableRWC, nil).
-			On("Detach", unreliableDC).Return(test.UnreliableRWC, nil).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("registerOpenHandler", unreliableDC, mock.Anything).Once().
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
-		_, err := initPeer(state, 1)
+		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		reliableOpenHandler()
 
 		<-state.unregisterQueue
-		require.True(t, test.authMessageGenerated)
 	})
 
 	t.Run("auth exchange: invalid role received in auth message", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
-			t:               t,
-			IsRecvAuthValid: false,
-			config:          config,
+			t:      t,
+			config: config,
 			firstMessageRecv: &protocol.AuthMessage{
-				Type:   protocol.MessageType_AUTH,
-				Method: "testAuth",
-				Role:   protocol.Role_UNKNOWN_ROLE,
+				Type: protocol.MessageType_AUTH,
+				Role: protocol.Role_UNKNOWN_ROLE,
 			},
 		})
 
@@ -486,40 +602,39 @@ func TestInitPeer(t *testing.T) {
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(false).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			reliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("RegisterOpenHandler", unreliableDC, mock.Anything).Once().
-			On("Detach", reliableDC).Return(test.ReliableRWC, nil).
-			On("Detach", unreliableDC).Return(test.UnreliableRWC, nil).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("registerOpenHandler", unreliableDC, mock.Anything).Once().
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
-		_, err := initPeer(state, 1)
+		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
 		<-state.unregisterQueue
-		require.True(t, test.authMessageGenerated)
 	})
 
 	t.Run("auth exchange: invalid credentials received", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(false, nil)
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
-			t:               t,
-			IsRecvAuthValid: false,
-			config:          config,
+			t:      t,
+			config: config,
 			firstMessageRecv: &protocol.AuthMessage{
-				Type:   protocol.MessageType_AUTH,
-				Method: "testAuth",
-				Role:   protocol.Role_CLIENT,
+				Type: protocol.MessageType_AUTH,
+				Role: protocol.Role_CLIENT,
 			},
 		})
 
@@ -532,40 +647,39 @@ func TestInitPeer(t *testing.T) {
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(false).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			reliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("RegisterOpenHandler", unreliableDC, mock.Anything).Once().
-			On("Detach", reliableDC).Return(test.ReliableRWC, nil).
-			On("Detach", unreliableDC).Return(test.UnreliableRWC, nil).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("registerOpenHandler", unreliableDC, mock.Anything).Once().
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
-		_, err := initPeer(state, 1)
+		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
 		<-state.unregisterQueue
-		require.True(t, test.authMessageGenerated)
 	})
 
 	t.Run("auth exchange: valid credentials are received from a client", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
-			t:               t,
-			IsRecvAuthValid: true,
-			config:          config,
+			t:      t,
+			config: config,
 			firstMessageRecv: &protocol.AuthMessage{
-				Type:   protocol.MessageType_AUTH,
-				Method: "testAuth",
-				Role:   protocol.Role_CLIENT,
+				Type: protocol.MessageType_AUTH,
+				Role: protocol.Role_CLIENT,
 			},
 		})
 
@@ -579,22 +693,22 @@ func TestInitPeer(t *testing.T) {
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(false).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			reliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("RegisterOpenHandler", unreliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("registerOpenHandler", unreliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			unreliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("Detach", reliableDC).Return(test.ReliableRWC, nil).
-			On("Detach", unreliableDC).Return(test.UnreliableRWC, nil).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
-		p, err := initPeer(state, 1)
+		p, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		go unreliableOpenHandler()
@@ -602,20 +716,20 @@ func TestInitPeer(t *testing.T) {
 
 		// NOTE: called by peer.Close() on read error
 		<-state.unregisterQueue
-		require.False(t, p.isServer)
+		require.Equal(t, protocol.Role_CLIENT, p.role)
 	})
 
 	t.Run("auth exchange: valid credentials are received from a server", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, webRtc)
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
-			t:               t,
-			IsRecvAuthValid: true,
-			config:          config,
+			t:      t,
+			config: config,
 			firstMessageRecv: &protocol.AuthMessage{
-				Type:   protocol.MessageType_AUTH,
-				Method: "testAuth",
-				Role:   protocol.Role_COMMUNICATION_SERVER,
+				Type: protocol.MessageType_AUTH,
+				Role: protocol.Role_COMMUNICATION_SERVER,
 			},
 		})
 
@@ -629,22 +743,22 @@ func TestInitPeer(t *testing.T) {
 		unreliableDC := &pion.DataChannel{}
 
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(false).
-			On("CreateReliableDataChannel", mock.Anything).Return(reliableDC, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
-			On("RegisterOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			reliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("RegisterOpenHandler", unreliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			On("registerOpenHandler", unreliableDC, mock.Anything).Run(func(args mock.Arguments) {
 			unreliableOpenHandler = args.Get(1).(func())
 		}).Once().
-			On("Detach", reliableDC).Return(test.ReliableRWC, nil).
-			On("Detach", unreliableDC).Return(test.UnreliableRWC, nil).
-			On("Close", conn).Return(nil).Once().
-			On("Close", conn).Return(errors.New("already closed"))
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
 
-		p, err := initPeer(state, 1)
+		p, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
 		go unreliableOpenHandler()
@@ -652,7 +766,54 @@ func TestInitPeer(t *testing.T) {
 
 		// NOTE: called by peer.Close() on read error
 		<-state.unregisterQueue
-		require.True(t, p.isServer)
+		require.Equal(t, protocol.Role_COMMUNICATION_SERVER, p.role)
+	})
+
+	t.Run("auth exchange: connecting to known server", func(t *testing.T) {
+		webRtc := &mockWebRtc{}
+		auth := &mockServerAuthenticator{}
+		auth.On("GenerateServerAuthMessage").Return(&protocol.AuthMessage{}, nil).Once()
+		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		test := setupAuthExchangeTest(authExchangeTestConfig{
+			t:      t,
+			config: config,
+			firstMessageRecv: &protocol.TopicMessage{
+				Type: protocol.MessageType_TOPIC,
+			},
+		})
+
+		state := makeTestState(test.t, config)
+
+		var reliableOpenHandler func()
+		var unreliableOpenHandler func()
+		conn := &pion.PeerConnection{}
+		reliableDC := &pion.DataChannel{}
+		unreliableDC := &pion.DataChannel{}
+
+		webRtc.
+			On("newConnection", uint64(100000)).Return(conn, nil).
+			On("isNew", conn).Return(false).
+			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
+			On("registerOpenHandler", reliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			reliableOpenHandler = args.Get(1).(func())
+		}).Once().
+			On("registerOpenHandler", unreliableDC, mock.Anything).Run(func(args mock.Arguments) {
+			unreliableOpenHandler = args.Get(1).(func())
+		}).Once().
+			On("detach", reliableDC).Return(test.ReliableRWC, nil).
+			On("detach", unreliableDC).Return(test.UnreliableRWC, nil).
+			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(errors.New("already closed"))
+
+		_, err := initPeer(state, 100000, protocol.Role_CLIENT)
+		require.NoError(t, err)
+
+		go unreliableOpenHandler()
+		reliableOpenHandler()
+
+		<-state.unregisterQueue
+		auth.AssertExpectations(t)
 	})
 }
 
@@ -666,7 +827,7 @@ func TestReadReliablePump(t *testing.T) {
 		p.messagesQueue = make(chan *peerMessage, 255)
 		p.topicQueue = make(chan topicChange, 255)
 		p.unregisterQueue = make(chan *peer, 255)
-		reliableDC := MockReadWriteCloser{}
+		reliableDC := mockReadWriteCloser{}
 		p.ReliableDC = &reliableDC
 
 		reliableDC.
@@ -717,7 +878,7 @@ func TestReadReliablePump(t *testing.T) {
 		}
 
 		p := setupPeer(t, 1, msg)
-		p.isServer = true
+		p.role = protocol.Role_COMMUNICATION_SERVER
 		p.readReliablePump()
 
 		require.Len(t, p.messagesQueue, 1)
@@ -728,7 +889,7 @@ func TestReadReliablePump(t *testing.T) {
 }
 
 func TestReadUnreliablePump(t *testing.T) {
-	setup := func(t *testing.T, alias uint64, msg proto.Message, webRtc *MockWebRtc) *peer {
+	setup := func(t *testing.T, alias uint64, msg proto.Message, webRtc *mockWebRtc) *peer {
 		services := makeTestServicesWithWebRtc(t, webRtc)
 		p := makeClient(alias, services)
 		p.messagesQueue = make(chan *peerMessage, 255)
@@ -738,7 +899,7 @@ func TestReadUnreliablePump(t *testing.T) {
 		encodedMsg, err := proto.Marshal(msg)
 		require.NoError(t, err)
 
-		unreliableDC := MockReadWriteCloser{}
+		unreliableDC := mockReadWriteCloser{}
 		p.UnreliableDC = &unreliableDC
 		unreliableDC.
 			On("Read", mock.Anything).Run(func(args mock.Arguments) {
@@ -789,20 +950,20 @@ func TestProcessConnect(t *testing.T) {
 		conn2 := &pion.PeerConnection{}
 		dc := &pion.DataChannel{}
 
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn1, nil).Once().
-			On("IsNew", conn1).Return(true).Once().
-			On("Close", conn1).Return(nil).Once().
-			On("CreateOffer", conn1).Return("offer", nil).Once().
-			On("NewConnection", uint64(2)).Return(conn2, nil).Once().
-			On("IsNew", conn2).Return(true).Once().
-			On("Close", conn2).Return(nil).Once().
-			On("CreateOffer", conn2).Return("offer", nil).Once().
-			On("CreateReliableDataChannel", mock.Anything).Return(dc, nil).
-			On("CreateUnreliableDataChannel", mock.Anything).Return(dc, nil).
-			On("RegisterOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("newConnection", uint64(1)).Return(conn1, nil).Once().
+			On("isNew", conn1).Return(true).Once().
+			On("close", conn1).Return(nil).Once().
+			On("createOffer", conn1).Return("offer", nil).Once().
+			On("newConnection", uint64(2)).Return(conn2, nil).Once().
+			On("isNew", conn2).Return(true).Once().
+			On("close", conn2).Return(nil).Once().
+			On("createOffer", conn2).Return("offer", nil).Once().
+			On("createReliableDataChannel", mock.Anything).Return(dc, nil).
+			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
+			On("registerOpenHandler", mock.Anything, mock.Anything)
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -825,16 +986,16 @@ func TestProcessConnect(t *testing.T) {
 		conn := &pion.PeerConnection{}
 		dc := &pion.DataChannel{}
 
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).
-			On("IsNew", conn).Return(true).Once().
-			On("Close", conn).Return(nil).Once().
-			On("CreateOffer", conn).Return("", errors.New("cannot create offer")).Once().
-			On("CreateReliableDataChannel", conn).Return(dc, nil).
-			On("CreateUnreliableDataChannel", conn).Return(dc, nil).
-			On("RegisterOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("newConnection", uint64(1)).Return(conn, nil).
+			On("isNew", conn).Return(true).Once().
+			On("close", conn).Return(nil).Once().
+			On("createOffer", conn).Return("", errors.New("cannot create offer")).Once().
+			On("createReliableDataChannel", conn).Return(dc, nil).
+			On("createUnreliableDataChannel", conn).Return(dc, nil).
+			On("registerOpenHandler", mock.Anything, mock.Anything)
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -852,11 +1013,11 @@ func TestProcessConnect(t *testing.T) {
 }
 
 func TestProcessSubscriptionChange(t *testing.T) {
-	setupPeer := func(state *State, alias uint64, isServer bool) *peer {
+	setupPeer := func(state *State, alias uint64, role protocol.Role) *peer {
 		p := &peer{
 			services: state.services,
 			Alias:    alias,
-			isServer: isServer,
+			role:     role,
 			Topics:   make(map[string]struct{}),
 		}
 
@@ -868,11 +1029,11 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		state := makeTestState(t, config)
 		defer closeState(state)
 
-		c1 := setupPeer(state, 1, false)
-		c2 := setupPeer(state, 2, false)
+		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
+		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
 
-		s1 := setupPeer(state, 3, true)
-		s1ReliableDC := MockReadWriteCloser{}
+		s1 := setupPeer(state, 3, protocol.Role_COMMUNICATION_SERVER)
+		s1ReliableDC := mockReadWriteCloser{}
 		s1.ReliableDC = &s1ReliableDC
 		s1ReliableDC.On("Write", mock.Anything).Return(0, nil)
 
@@ -909,9 +1070,9 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		state := makeTestState(t, config)
 		defer closeState(state)
 
-		s1 := setupPeer(state, 1, true)
-		s2 := setupPeer(state, 2, true)
-		s2ReliableDC := MockReadWriteCloser{}
+		s1 := setupPeer(state, 1, protocol.Role_COMMUNICATION_SERVER)
+		s2 := setupPeer(state, 2, protocol.Role_COMMUNICATION_SERVER)
+		s2ReliableDC := mockReadWriteCloser{}
 		s2.ReliableDC = &s2ReliableDC
 
 		state.topicQueue <- topicChange{
@@ -938,13 +1099,13 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		state := makeTestState(t, config)
 		defer closeState(state)
 
-		c1 := setupPeer(state, 1, false)
+		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
 		c1.Topics["topic1"] = struct{}{}
-		c2 := setupPeer(state, 2, false)
+		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
 		c2.Topics["topic1"] = struct{}{}
 
-		s1 := setupPeer(state, 3, true)
-		s1ReliableDC := MockReadWriteCloser{}
+		s1 := setupPeer(state, 3, protocol.Role_COMMUNICATION_SERVER)
+		s1ReliableDC := mockReadWriteCloser{}
 		s1.ReliableDC = &s1ReliableDC
 		s1ReliableDC.On("Write", mock.Anything).Return(0, nil)
 
@@ -1004,16 +1165,16 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		conn := &pion.PeerConnection{}
 		dc := &pion.DataChannel{}
 
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("NewConnection", uint64(1)).Return(conn, nil).Once().
-			On("IsNew", conn).Return(true).Once().
-			On("Close", conn).Return(nil).Once().
-			On("OnOffer", conn, "sdp-offer").Return("sdp-answer", nil).Once().
-			On("CreateReliableDataChannel", conn).Return(dc, nil).Once().
-			On("CreateUnreliableDataChannel", conn).Return(dc, nil).Once().
-			On("RegisterOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("newConnection", uint64(1)).Return(conn, nil).Once().
+			On("isNew", conn).Return(true).Once().
+			On("close", conn).Return(nil).Once().
+			On("onOffer", conn, "sdp-offer").Return("sdp-answer", nil).Once().
+			On("createReliableDataChannel", conn).Return(dc, nil).Once().
+			On("createUnreliableDataChannel", conn).Return(dc, nil).Once().
+			On("registerOpenHandler", mock.Anything, mock.Anything)
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1036,10 +1197,10 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc offer", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("OnOffer", mock.Anything, "sdp-offer").Return("sdp-answer", nil).Twice()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", nil).Twice()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1068,10 +1229,10 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc offer (offer error)", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("OnOffer", mock.Anything, "sdp-offer").Return("sdp-answer", errors.New("offer error")).Once()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", errors.New("offer error")).Once()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1092,10 +1253,10 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc answer", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("OnAnswer", mock.Anything, "sdp-answer").Return(nil).Once()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("onAnswer", mock.Anything, "sdp-answer").Return(nil).Once()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1115,10 +1276,10 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc ice candidate", func(t *testing.T) {
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("OnIceCandidate", mock.Anything, "sdp-candidate").Return(nil).Once()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("onIceCandidate", mock.Anything, "sdp-candidate").Return(nil).Once()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1149,7 +1310,7 @@ func TestProcessTopicMessage(t *testing.T) {
 			},
 		}
 
-		p2ReliableDC := &MockReadWriteCloser{}
+		p2ReliableDC := &mockReadWriteCloser{}
 		p2ReliableDC.On("Write", mock.Anything).Return(0, nil).Once()
 		p2 := &peer{
 			Alias:      2,
@@ -1174,11 +1335,11 @@ func TestProcessTopicMessage(t *testing.T) {
 			},
 		}
 
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("IsClosed", p2.conn).Return(false).Once().
-			On("IsClosed", p4.conn).Return(true).Once()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("isClosed", p2.conn).Return(false).Once().
+			On("isClosed", p4.conn).Return(true).Once()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 		state := makeTestState(t, config)
 		defer closeState(state)
 
@@ -1215,7 +1376,7 @@ func TestProcessTopicMessage(t *testing.T) {
 			},
 		}
 
-		p2ReliableDC := &MockReadWriteCloser{}
+		p2ReliableDC := &mockReadWriteCloser{}
 		p2ReliableDC.On("Write", mock.Anything).Return(0, nil).Twice()
 		p2 := &peer{
 			Alias:      2,
@@ -1226,10 +1387,10 @@ func TestProcessTopicMessage(t *testing.T) {
 			},
 		}
 
-		webRtc := &MockWebRtc{}
+		webRtc := &mockWebRtc{}
 		webRtc.
-			On("IsClosed", p2.conn).Return(false).Twice()
-		config := makeTestConfigWithWebRtc(t, webRtc)
+			On("isClosed", p2.conn).Return(false).Twice()
+		config := makeTestConfigWithWebRtc(t, nil, webRtc)
 		state := makeTestState(t, config)
 		defer closeState(state)
 
@@ -1262,12 +1423,7 @@ func TestProcessTopicMessage(t *testing.T) {
 }
 
 func BenchmarkProcessSubscriptionChange(b *testing.B) {
-	auth := authentication.Make()
-	config := Config{
-		Auth:       auth,
-		AuthMethod: "testAuth",
-		WebRtc:     nil,
-	}
+	config := Config{}
 
 	state, err := MakeState(&config)
 	require.NoError(b, err)

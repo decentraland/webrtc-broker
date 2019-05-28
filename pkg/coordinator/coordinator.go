@@ -19,23 +19,8 @@ const (
 	maxMessageSize = 5000 // NOTE let's adjust this later
 )
 
-var UnauthorizedError = errors.New("unathorized")
-var NoMethodProvidedError = errors.New("no method provided")
-
-type inMessage struct {
-	msgType protocol.MessageType
-	from    *Peer
-	bytes   []byte
-	toAlias uint64
-}
-
-type Peer struct {
-	Alias    uint64
-	conn     ws.IWebsocket
-	send     chan []byte
-	isClosed bool
-	isServer bool
-}
+// ErrUnauthorized indicates that a peer is not authorized for the role
+var ErrUnauthorized = errors.New("unauthorized")
 
 // IServerSelector is in charge of tracking and processing the server list
 type IServerSelector interface {
@@ -44,11 +29,53 @@ type IServerSelector interface {
 	GetServerAliasList(forPeer *Peer) []uint64
 }
 
-// CoordinatorState represent the state of the coordinator
-type CoordinatorState struct {
+// DefaultServerSelector is the default server selector
+type DefaultServerSelector struct {
+	ServerAliases map[uint64]bool
+}
+
+// ServerRegistered register a new server
+func (r *DefaultServerSelector) ServerRegistered(server *Peer) {
+	r.ServerAliases[server.Alias] = true
+}
+
+// ServerUnregistered removes an unregistered server from the list
+func (r *DefaultServerSelector) ServerUnregistered(server *Peer) {
+	delete(r.ServerAliases, server.Alias)
+}
+
+// GetServerAliasList returns a list of tracked server aliases
+func (r *DefaultServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
+	peers := make([]uint64, 0, len(r.ServerAliases))
+
+	for alias := range r.ServerAliases {
+		peers = append(peers, alias)
+	}
+
+	return peers
+}
+
+type inMessage struct {
+	msgType protocol.MessageType
+	from    *Peer
+	bytes   []byte
+	toAlias uint64
+}
+
+// Peer represents any peer, both server and clients
+type Peer struct {
+	Alias    uint64
+	conn     ws.IWebsocket
+	sendCh   chan []byte
+	isClosed bool
+	isServer bool
+}
+
+// State represent the state of the coordinator
+type State struct {
 	serverSelector IServerSelector
 	upgrader       ws.IUpgrader
-	auth           authentication.Authentication
+	auth           authentication.CoordinatorAuthenticator
 	marshaller     protocol.IMarshaller
 	log            *logging.Logger
 
@@ -67,12 +94,12 @@ type CoordinatorState struct {
 type Config struct {
 	Log            *logging.Logger
 	ServerSelector IServerSelector
-	Auth           authentication.Authentication
+	Auth           authentication.CoordinatorAuthenticator
 }
 
 // MakeState creates a new CoordinatorState
-func MakeState(config *Config) *CoordinatorState {
-	return &CoordinatorState{
+func MakeState(config *Config) *State {
+	return &State{
 		serverSelector:     config.ServerSelector,
 		upgrader:           ws.MakeUpgrader(),
 		auth:               config.Auth,
@@ -90,7 +117,7 @@ func MakeState(config *Config) *CoordinatorState {
 func makePeer(conn ws.IWebsocket, isServer bool) *Peer {
 	return &Peer{
 		conn:     conn,
-		send:     make(chan []byte, 256),
+		sendCh:   make(chan []byte, 256),
 		isServer: isServer,
 	}
 }
@@ -98,7 +125,7 @@ func makePeer(conn ws.IWebsocket, isServer bool) *Peer {
 func makeClient(conn ws.IWebsocket) *Peer     { return makePeer(conn, false) }
 func makeCommServer(conn ws.IWebsocket) *Peer { return makePeer(conn, true) }
 
-func (p *Peer) Send(state *CoordinatorState, msg protocol.Message) error {
+func (p *Peer) send(state *State, msg protocol.Message) error {
 	log := state.log
 	bytes, err := state.marshaller.Marshal(msg)
 	if err != nil {
@@ -106,11 +133,11 @@ func (p *Peer) Send(state *CoordinatorState, msg protocol.Message) error {
 		return err
 	}
 
-	p.send <- bytes
+	p.sendCh <- bytes
 	return nil
 }
 
-func (p *Peer) writePump(state *CoordinatorState) {
+func (p *Peer) writePump(state *State) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -120,7 +147,7 @@ func (p *Peer) writePump(state *CoordinatorState) {
 
 	for {
 		select {
-		case bytes, ok := <-p.send:
+		case bytes, ok := <-p.sendCh:
 			p.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				p.conn.WriteCloseMessage()
@@ -131,9 +158,9 @@ func (p *Peer) writePump(state *CoordinatorState) {
 				return
 			}
 
-			n := len(p.send)
+			n := len(p.sendCh)
 			for i := 0; i < n; i++ {
-				bytes = <-p.send
+				bytes = <-p.sendCh
 				if err := p.conn.WriteMessage(bytes); err != nil {
 					log.WithError(err).Error("error writing message")
 					return
@@ -149,18 +176,18 @@ func (p *Peer) writePump(state *CoordinatorState) {
 	}
 }
 
-func (p *Peer) Close() {
+func (p *Peer) close() {
 	if !p.isClosed {
 		p.conn.Close()
-		close(p.send)
+		close(p.sendCh)
 		p.isClosed = true
 	}
 }
 
-func readPump(state *CoordinatorState, p *Peer) {
+func readPump(state *State, p *Peer) {
 	defer func() {
 		state.unregister <- p
-		p.Close()
+		p.close()
 	}()
 	log := state.log
 	marshaller := state.marshaller
@@ -232,29 +259,24 @@ func readPump(state *CoordinatorState, p *Peer) {
 	}
 }
 
-func UpgradeRequest(state *CoordinatorState, role protocol.Role, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
+// UpgradeRequest upgrades a HTTP request to ws protocol and authenticates for the role
+func UpgradeRequest(state *State, role protocol.Role, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
 	qs := r.URL.Query()
 
-	method := qs["method"]
-
-	if len(method) == 0 {
-		return nil, NoMethodProvidedError
-	}
-
-	isValid, err := state.auth.AuthenticateQs(method[0], role, qs)
+	isValid, err := state.auth.AuthenticateFromURL(role, qs)
 
 	if err != nil {
 		return nil, err
 	}
 
 	if !isValid {
-		return nil, UnauthorizedError
+		return nil, ErrUnauthorized
 	}
 
 	return state.upgrader.Upgrade(w, r)
 }
 
-func closeState(state *CoordinatorState) {
+func closeState(state *State) {
 	close(state.registerClient)
 	close(state.registerCommServer)
 	close(state.unregister)
@@ -262,7 +284,8 @@ func closeState(state *CoordinatorState) {
 	close(state.stop)
 }
 
-func ConnectCommServer(state *CoordinatorState, conn ws.IWebsocket) {
+// ConnectCommServer establish a ws connection to a communication server
+func ConnectCommServer(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info("socket connect (server)")
 	p := makeCommServer(conn)
@@ -271,7 +294,8 @@ func ConnectCommServer(state *CoordinatorState, conn ws.IWebsocket) {
 	go p.writePump(state)
 }
 
-func ConnectClient(state *CoordinatorState, conn ws.IWebsocket) {
+// ConnectClient establish a ws connection to a client
+func ConnectClient(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info("socket connect (client)")
 	p := makeClient(conn)
@@ -280,7 +304,8 @@ func ConnectClient(state *CoordinatorState, conn ws.IWebsocket) {
 	go p.writePump(state)
 }
 
-func Process(state *CoordinatorState) {
+// Start starts the coordinator
+func Start(state *State) {
 	log := state.log
 	ticker := time.NewTicker(reportPeriod)
 	defer ticker.Stop()
@@ -320,9 +345,9 @@ func Process(state *CoordinatorState) {
 
 			for _, p := range state.Peers {
 				if p.isServer {
-					serversCount += 1
+					serversCount++
 				} else {
-					clientsCount += 1
+					clientsCount++
 				}
 			}
 
@@ -342,7 +367,7 @@ func Process(state *CoordinatorState) {
 }
 
 // Register coordinator endpoints for server discovery and client connect
-func Register(state *CoordinatorState, mux *http.ServeMux) {
+func Register(state *State, mux *http.ServeMux) {
 	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
 
@@ -366,8 +391,8 @@ func Register(state *CoordinatorState, mux *http.ServeMux) {
 	})
 }
 
-func registerCommServer(state *CoordinatorState, p *Peer) error {
-	state.LastPeerAlias += 1
+func registerCommServer(state *State, p *Peer) error {
+	state.LastPeerAlias++
 	alias := state.LastPeerAlias
 	p.Alias = alias
 
@@ -382,11 +407,11 @@ func registerCommServer(state *CoordinatorState, p *Peer) error {
 		AvailableServers: servers,
 	}
 
-	return p.Send(state, msg)
+	return p.send(state, msg)
 }
 
-func registerClient(state *CoordinatorState, p *Peer) {
-	state.LastPeerAlias += 1
+func registerClient(state *State, p *Peer) {
+	state.LastPeerAlias++
 	alias := state.LastPeerAlias
 	p.Alias = alias
 
@@ -399,10 +424,10 @@ func registerClient(state *CoordinatorState, p *Peer) {
 		Alias:            alias,
 		AvailableServers: servers,
 	}
-	p.Send(state, msg)
+	p.send(state, msg)
 }
 
-func unregister(state *CoordinatorState, p *Peer) {
+func unregister(state *State, p *Peer) {
 	delete(state.Peers, p.Alias)
 
 	if p.isServer {
@@ -410,16 +435,16 @@ func unregister(state *CoordinatorState, p *Peer) {
 	}
 }
 
-func signal(state *CoordinatorState, inMsg *inMessage) {
+func signal(state *State, inMsg *inMessage) {
 	toAlias := inMsg.toAlias
 	p := state.Peers[toAlias]
 
 	if p != nil && !p.isClosed {
-		p.send <- inMsg.bytes
+		p.sendCh <- inMsg.bytes
 	}
 }
 
-func repackageWebRtcMessage(state *CoordinatorState, from *Peer, bytes []byte, webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
+func repackageWebRtcMessage(state *State, from *Peer, bytes []byte, webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
 	log := state.log
 	marshaller := state.marshaller
 	if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {

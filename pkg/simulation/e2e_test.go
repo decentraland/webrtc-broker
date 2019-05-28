@@ -11,7 +11,6 @@ import (
 
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 
-	_testing "github.com/decentraland/webrtc-broker/internal/testing"
 	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	"github.com/decentraland/webrtc-broker/pkg/coordinator"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -20,72 +19,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type MockAuthenticator = _testing.MockAuthenticator
-
-var appName = "e2e-test"
-
 const (
 	sleepPeriod     = 5 * time.Second
 	longSleepPeriod = 15 * time.Second
 )
-
-type MockServerSelector struct {
-	serverAliases []uint64
-}
-
-func (r *MockServerSelector) ServerRegistered(server *coordinator.Peer) {
-	r.serverAliases = append(r.serverAliases, server.Alias)
-}
-
-func (r *MockServerSelector) ServerUnregistered(server *coordinator.Peer) {}
-
-func (r *MockServerSelector) GetServerAliasList(forPeer *coordinator.Peer) []uint64 {
-	peers := []uint64{}
-
-	for _, alias := range r.serverAliases {
-		peers = append(peers, alias)
-	}
-
-	return peers
-}
-
-func makeTestAuthenticator() *MockAuthenticator {
-	auth := _testing.MakeWithAuthResponse(true)
-	auth.GenerateAuthURL_ = func(baseURL string, role protocol.Role) (string, error) {
-		return fmt.Sprintf("%s?method=testAuth", baseURL), nil
-	}
-	auth.GenerateAuthMessage_ = func(role protocol.Role) (*protocol.AuthMessage, error) {
-		return &protocol.AuthMessage{
-			Type:   protocol.MessageType_AUTH,
-			Role:   role,
-			Method: "testAuth",
-		}, nil
-	}
-
-	return auth
-}
 
 func printTitle(title string) {
 	s := fmt.Sprintf("=== %s ===", title)
 	log.Println(s)
 }
 
-func startCoordinator(t *testing.T) (*coordinator.CoordinatorState, *http.Server, string, string) {
+func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string, string) {
 	host := "localhost"
 	port := 9999
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	log := logrus.New()
-	auth := authentication.Make()
-	auth.AddOrUpdateAuthenticator("testAuth", makeTestAuthenticator())
+	auth := &authentication.NoopAuthenticator{}
 	config := coordinator.Config{
-		ServerSelector: &MockServerSelector{serverAliases: []uint64{}},
-		Auth:           auth,
-		Log:            log,
+		ServerSelector: &coordinator.DefaultServerSelector{
+			ServerAliases: make(map[uint64]bool),
+		},
+		Auth: auth,
+		Log:  log,
 	}
 	state := coordinator.MakeState(&config)
 
-	go coordinator.Process(state)
+	go coordinator.Start(state)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
@@ -161,9 +121,8 @@ func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 
 func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 	logger := logrus.New()
-	auth := authentication.Make()
-	authenticator := makeTestAuthenticator()
-	auth.AddOrUpdateAuthenticator("testAuth", authenticator)
+	logger.SetLevel(logrus.DebugLevel)
+	auth := &authentication.NoopAuthenticator{}
 
 	reporter := &testReporter{
 		RequestData: make(chan bool),
@@ -173,7 +132,6 @@ func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 	config := commserver.Config{
 		Auth:           auth,
 		Log:            logger,
-		AuthMethod:     "testAuth",
 		CoordinatorURL: discoveryURL,
 		ReportPeriod:   1 * time.Second,
 		Reporter:       func(state *commserver.State) { reporter.Report(state) },
@@ -212,15 +170,12 @@ func TestE2E(t *testing.T) {
 	comm1Reporter := startCommServer(t, discoveryURL)
 	comm2Reporter := startCommServer(t, discoveryURL)
 
-	auth := authentication.Make()
-	authenticator := makeTestAuthenticator()
-	auth.AddOrUpdateAuthenticator("testAuth", authenticator)
+	auth := &authentication.NoopAuthenticator{}
 
 	c1ReceivedReliable := make(chan recvMessage, 256)
 	c1ReceivedUnreliable := make(chan recvMessage, 256)
 	config := Config{
 		Auth:           auth,
-		AuthMethod:     "testAuth",
 		CoordinatorURL: connectURL,
 		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
 			m := recvMessage{msgType: msgType, raw: raw}
@@ -237,7 +192,6 @@ func TestE2E(t *testing.T) {
 	c2ReceivedUnreliable := make(chan recvMessage, 256)
 	config = Config{
 		Auth:           auth,
-		AuthMethod:     "testAuth",
 		CoordinatorURL: connectURL,
 		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
 			m := recvMessage{msgType: msgType, raw: raw}
@@ -282,21 +236,14 @@ func TestE2E(t *testing.T) {
 	printTitle("Authorizing clients")
 
 	authMessage := protocol.AuthMessage{
-		Type:   protocol.MessageType_AUTH,
-		Method: "testAuth",
-		Role:   protocol.Role_CLIENT,
+		Type: protocol.MessageType_AUTH,
+		Role: protocol.Role_CLIENT,
 	}
 	authBytes, err := proto.Marshal(&authMessage)
 	require.NoError(t, err)
 
 	c1.authMessage <- authBytes
 	c2.authMessage <- authBytes
-
-	recvMsg := <-c1ReceivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
-
-	recvMsg = <-c2ReceivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
@@ -338,7 +285,7 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c1ReceivedReliable, 1)
 	require.Len(t, c2ReceivedReliable, 1)
 
-	recvMsg = <-c1ReceivedReliable
+	recvMsg := <-c1ReceivedReliable
 	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
 	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
 	require.Equal(t, []byte("c2 test"), dataMessage.Body)
@@ -383,10 +330,8 @@ func TestE2E(t *testing.T) {
 	go c2.conn.Close()
 	c2.conn = nil
 	c2.Connect(c2Data.Alias, comm1Snapshot.Alias)
-
 	c2.authMessage <- authBytes
-	recvMsg = <-c2ReceivedReliable
-	require.Equal(t, protocol.MessageType_AUTH, recvMsg.msgType)
+	time.Sleep(longSleepPeriod)
 
 	printTitle("Subscribe to topics again")
 	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))

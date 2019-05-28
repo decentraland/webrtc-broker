@@ -14,25 +14,23 @@ import (
 func main() {
 	host := flag.String("host", "localhost", "")
 	port := flag.Int("port", 9090, "")
-	noopAuthEnabled := flag.Bool("noopAuthEnabled", false, "")
 	flag.Parse()
 
 	log := logrus.New()
 	defer logging.LogPanic()
 
-	auth := authentication.Make()
-	if *noopAuthEnabled {
-		auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
-	}
+	auth := authentication.NoopAuthenticator{}
 
 	config := coordinator.Config{
-		ServerSelector: coordinator.MakeRandomServerSelector(),
-		Auth:           auth,
-		Log:            log,
+		ServerSelector: &coordinator.DefaultServerSelector{
+			ServerAliases: make(map[uint64]bool),
+		},
+		Auth: &auth,
+		Log:  log,
 	}
 	state := coordinator.MakeState(&config)
 
-	go coordinator.Process(state)
+	go coordinator.Start(state)
 
 	mux := http.NewServeMux()
 	coordinator.Register(state, mux)

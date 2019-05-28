@@ -7,6 +7,7 @@ import (
 	_websocket "github.com/gorilla/websocket"
 )
 
+// IWebsocket represents a websocket
 type IWebsocket interface {
 	SetWriteDeadline(t time.Time) error
 	SetReadDeadline(t time.Time) error
@@ -22,10 +23,12 @@ type IWebsocket interface {
 	Close() error
 }
 
+// IUpgrader interface to encapsulate the websocket upgrade procedure
 type IUpgrader interface {
 	Upgrade(w http.ResponseWriter, r *http.Request) (IWebsocket, error)
 }
 
+// Upgrader is the default upgrader
 type Upgrader struct {
 	upgrader _websocket.Upgrader
 }
@@ -70,20 +73,12 @@ func (ws *websocket) Close() error {
 	return ws.conn.Close()
 }
 
-func (upgrader *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (IWebsocket, error) {
-	conn, err := upgrader.upgrader.Upgrade(w, r, nil)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &websocket{conn: conn}, nil
-}
-
+// IsUnexpectedCloseError returns true if the error is not a normal ws close error
 func IsUnexpectedCloseError(err error) bool {
 	return _websocket.IsUnexpectedCloseError(err, _websocket.CloseGoingAway, _websocket.CloseAbnormalClosure)
 }
 
+// Dial open a websocket connection to the given url
 func Dial(url string) (IWebsocket, error) {
 	conn, _, err := _websocket.DefaultDialer.Dial(url, nil)
 
@@ -94,6 +89,7 @@ func Dial(url string) (IWebsocket, error) {
 	return &websocket{conn: conn}, nil
 }
 
+// MakeUpgrader creates default upgrader
 func MakeUpgrader() IUpgrader {
 	upgrader := _websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -102,4 +98,15 @@ func MakeUpgrader() IUpgrader {
 	}
 
 	return &Upgrader{upgrader: upgrader}
+}
+
+// Upgrade upgrades a websocket HTTP request into ws protocol
+func (upgrader *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request) (IWebsocket, error) {
+	conn, err := upgrader.upgrader.Upgrade(w, r, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &websocket{conn: conn}, nil
 }

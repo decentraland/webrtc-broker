@@ -1,4 +1,4 @@
-package webrtc
+package commserver
 
 import (
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -22,26 +22,26 @@ type ICEServer = pion.ICEServer
 
 // IWebRtc is this module interface
 type IWebRtc interface {
-	NewConnection(peerAlias uint64) (*PeerConnection, error)
-	CreateReliableDataChannel(conn *PeerConnection) (*DataChannel, error)
-	CreateUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error)
-	RegisterOpenHandler(*DataChannel, func())
-	Detach(*DataChannel) (ReadWriteCloser, error)
-	CreateOffer(conn *PeerConnection) (string, error)
-	OnAnswer(conn *PeerConnection, sdp string) error
-	OnOffer(conn *PeerConnection, sdp string) (string, error)
-	OnIceCandidate(conn *PeerConnection, sdp string) error
-	IsClosed(conn *PeerConnection) bool
-	IsNew(conn *PeerConnection) bool
-	Close(conn *PeerConnection) error
+	newConnection(peerAlias uint64) (*PeerConnection, error)
+	createReliableDataChannel(conn *PeerConnection) (*DataChannel, error)
+	createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error)
+	registerOpenHandler(*DataChannel, func())
+	detach(*DataChannel) (ReadWriteCloser, error)
+	createOffer(conn *PeerConnection) (string, error)
+	onAnswer(conn *PeerConnection, sdp string) error
+	onOffer(conn *PeerConnection, sdp string) (string, error)
+	onIceCandidate(conn *PeerConnection, sdp string) error
+	isClosed(conn *PeerConnection) bool
+	isNew(conn *PeerConnection) bool
+	close(conn *PeerConnection) error
 }
 
 // WebRtc is our inmplemenation of IWebRtc
-type WebRtc struct {
+type webRTC struct {
 	ICEServers []ICEServer
 }
 
-func (w *WebRtc) NewConnection(peerAlias uint64) (*PeerConnection, error) {
+func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 	s := pion.SettingEngine{}
 
 	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: peerAlias}
@@ -59,25 +59,25 @@ func (w *WebRtc) NewConnection(peerAlias uint64) (*PeerConnection, error) {
 	return conn, nil
 }
 
-func (w *WebRtc) IsClosed(conn *PeerConnection) bool {
+func (w *webRTC) isClosed(conn *PeerConnection) bool {
 	return conn.ConnectionState() == pion.PeerConnectionStateClosed
 }
 
-func (w *WebRtc) IsNew(conn *PeerConnection) bool {
+func (w *webRTC) isNew(conn *PeerConnection) bool {
 	return conn.ICEConnectionState() == pion.ICEConnectionStateNew || conn.ICEConnectionState() == pion.ICEConnectionStateChecking
 }
 
-func (w *WebRtc) Close(conn *PeerConnection) error {
+func (w *webRTC) close(conn *PeerConnection) error {
 	return conn.Close()
 }
 
-func (w *WebRtc) CreateReliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
+func (w *webRTC) createReliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
 	return conn.CreateDataChannel("reliable", nil)
 }
 
-func (w *WebRtc) CreateUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
-	var maxRetransmits uint16 = 0
-	var ordered bool = false
+func (w *webRTC) createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
+	var maxRetransmits uint16
+	var ordered = false
 	options := &pion.DataChannelInit{
 		MaxRetransmits: &maxRetransmits,
 		Ordered:        &ordered,
@@ -86,15 +86,15 @@ func (w *WebRtc) CreateUnreliableDataChannel(conn *PeerConnection) (*DataChannel
 	return conn.CreateDataChannel("unreliable", options)
 }
 
-func (w *WebRtc) RegisterOpenHandler(dc *DataChannel, handler func()) {
+func (w *webRTC) registerOpenHandler(dc *DataChannel, handler func()) {
 	dc.OnOpen(handler)
 }
 
-func (w *WebRtc) Detach(dc *DataChannel) (ReadWriteCloser, error) {
+func (w *webRTC) detach(dc *DataChannel) (ReadWriteCloser, error) {
 	return dc.Detach()
 }
 
-func (w *WebRtc) CreateOffer(conn *PeerConnection) (string, error) {
+func (w *webRTC) createOffer(conn *PeerConnection) (string, error) {
 	offer, err := conn.CreateOffer(nil)
 	if err != nil {
 		return "", err
@@ -108,7 +108,7 @@ func (w *WebRtc) CreateOffer(conn *PeerConnection) (string, error) {
 	return offer.SDP, nil
 }
 
-func (w *WebRtc) OnAnswer(conn *PeerConnection, sdp string) error {
+func (w *webRTC) onAnswer(conn *PeerConnection, sdp string) error {
 	answer := pion.SessionDescription{
 		Type: pion.SDPTypeAnswer,
 		SDP:  sdp,
@@ -121,7 +121,7 @@ func (w *WebRtc) OnAnswer(conn *PeerConnection, sdp string) error {
 	return nil
 }
 
-func (w *WebRtc) OnOffer(conn *PeerConnection, sdp string) (string, error) {
+func (w *webRTC) onOffer(conn *PeerConnection, sdp string) (string, error) {
 	offer := pion.SessionDescription{
 		Type: pion.SDPTypeOffer,
 		SDP:  sdp,
@@ -144,7 +144,7 @@ func (w *WebRtc) OnOffer(conn *PeerConnection, sdp string) (string, error) {
 	return answer.SDP, nil
 }
 
-func (w *WebRtc) OnIceCandidate(conn *PeerConnection, sdp string) error {
+func (w *webRTC) onIceCandidate(conn *PeerConnection, sdp string) error {
 	if err := conn.AddICECandidate(pion.ICECandidateInit{Candidate: sdp}); err != nil {
 		return err
 	}

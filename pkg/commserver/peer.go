@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
-	"github.com/decentraland/webrtc-broker/internal/webrtc"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
 
@@ -18,15 +17,15 @@ type peer struct {
 	messagesQueue   chan *peerMessage
 	unregisterQueue chan *peer
 
-	ReliableDC     webrtc.ReadWriteCloser
+	ReliableDC     ReadWriteCloser
 	reliableBuffer []byte
 
-	UnreliableDC     webrtc.ReadWriteCloser
+	UnreliableDC     ReadWriteCloser
 	unreliableBuffer []byte
 
 	serverAlias uint64
-	conn        *webrtc.PeerConnection
-	isServer    bool
+	conn        *PeerConnection
+	role        protocol.Role
 }
 
 func (p *peer) log() *logging.Entry {
@@ -42,11 +41,11 @@ func (p *peer) logError(err error) *logging.Entry {
 }
 
 func (p *peer) IsClosed() bool {
-	return p.services.WebRtc.IsClosed(p.conn)
+	return p.services.WebRtc.isClosed(p.conn)
 }
 
 func (p *peer) Close() {
-	err := p.services.WebRtc.Close(p.conn)
+	err := p.services.WebRtc.close(p.conn)
 
 	if err != nil {
 		p.logError(err).Warn("error closing connection")
@@ -171,7 +170,7 @@ func (p *peer) readPeerMessage(reliable bool, rawMsg []byte) {
 	}
 
 	msg := &peerMessage{
-		fromServer: p.isServer,
+		fromServer: p.role == protocol.Role_COMMUNICATION_SERVER,
 		receivedAt: time.Now(),
 		reliable:   reliable,
 		topic:      message.Topic,
@@ -183,7 +182,7 @@ func (p *peer) readPeerMessage(reliable bool, rawMsg []byte) {
 		Body: message.Body,
 	}
 
-	if p.isServer {
+	if p.role == protocol.Role_COMMUNICATION_SERVER {
 		dataMessage.FromAlias = message.FromAlias
 	} else {
 		dataMessage.FromAlias = p.Alias

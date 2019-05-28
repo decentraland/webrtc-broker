@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"time"
 
@@ -27,8 +28,7 @@ type peerData struct {
 // Config is the client config
 type Config struct {
 	ICEServers        []pion.ICEServer
-	Auth              authentication.Authentication
-	AuthMethod        string
+	Auth              authentication.ClientAuthenticator
 	OnMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
 	CoordinatorURL    string
 }
@@ -53,7 +53,7 @@ type Client struct {
 
 // MakeClient creates a new client
 func MakeClient(config *Config) *Client {
-	url, err := config.Auth.GenerateAuthURL(config.AuthMethod, config.CoordinatorURL, protocol.Role_CLIENT)
+	url, err := config.Auth.GenerateClientConnectURL(config.CoordinatorURL)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -142,7 +142,6 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	})
 
 	conn.OnDataChannel(func(d *pion.DataChannel) {
-
 		readPump := func(client *Client, c datachannel.Reader, reliable bool) {
 			header := protocol.MessageHeader{}
 			buffer := make([]byte, 1024)
@@ -221,15 +220,15 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 		d.OnOpen(func() {
 			dd, err := d.Detach()
 			if err != nil {
-				log.Fatal("cannot detach datachannel")
+				log.Fatal("cannot detach datachannel", err)
 			}
 
 			reliable := d.Label() == "reliable"
 
 			if reliable {
-				log.Println("Data channel open (reliable)")
+				fmt.Println("Data channel open (reliable)")
 			} else {
-				log.Println("Data channel open (unreliable)")
+				fmt.Println("Data channel open (unreliable)")
 			}
 			go readPump(client, dd, reliable)
 			go writePump(client, dd, reliable)
@@ -256,7 +255,7 @@ func Start(config *Config) *Client {
 		log.Fatal(err)
 	}
 
-	authMessage, err := config.Auth.GenerateAuthMessage(config.AuthMethod, protocol.Role_CLIENT)
+	authMessage, err := config.Auth.GenerateClientAuthMessage()
 	if err != nil {
 		log.Fatal(err)
 	}

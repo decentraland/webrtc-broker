@@ -17,9 +17,9 @@ func main() {
 	log := logrus.New()
 	defer logging.LogPanic()
 
-	auth := authentication.Make()
+	auth := authentication.NoopAuthenticator{}
 	config := commserver.Config{
-		Auth: auth,
+		Auth: &auth,
 		Log:  log,
 		ICEServers: []commserver.ICEServer{
 			{
@@ -29,10 +29,7 @@ func main() {
 	}
 
 	flag.StringVar(&config.CoordinatorURL, "coordinatorUrl", "ws://localhost:9090", "")
-	flag.StringVar(&config.AuthMethod, "authMethod", "secret", "noop")
-
 	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
-	noopAuthEnabled := flag.Bool("noopAuthEnabled", false, "")
 
 	flag.Parse()
 
@@ -42,10 +39,6 @@ func main() {
 			log.Info("Starting profiler at ", addr)
 			log.Debug(http.ListenAndServe(addr, nil))
 		}()
-	}
-
-	if *noopAuthEnabled {
-		auth.AddOrUpdateAuthenticator("noop", &authentication.NoopAuthenticator{})
 	}
 
 	config.CoordinatorURL = fmt.Sprintf("%s/discover", config.CoordinatorURL)

@@ -43,4 +43,7 @@ tidy:
 todo:
 	grep --include "*.go" -r TODO *
 
-.PHONY: build test vtest
+lint:
+	golint ./...
+
+.PHONY: build test integration cover

@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 )
 
+// ZipCompression is the zip compression interace
 type ZipCompression interface {
 	Zip(plain []byte) ([]byte, error)
 	Unzip(zipped []byte) ([]byte, error)
@@ -14,6 +15,7 @@ type ZipCompression interface {
 // GzipCompression compressor for gzip format
 type GzipCompression struct{}
 
+// Zip the given byte array
 func (g *GzipCompression) Zip(plain []byte) ([]byte, error) {
 	var b bytes.Buffer
 
@@ -30,6 +32,7 @@ func (g *GzipCompression) Zip(plain []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// Unzip the given byte array
 func (g *GzipCompression) Unzip(zipped []byte) ([]byte, error) {
 	b := bytes.NewBuffer(zipped)
 

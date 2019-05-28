@@ -1849,7 +1849,6 @@ proto.protocol.AuthMessage.toObject = function(includeInstance, msg) {
   var f, obj = {
     type: jspb.Message.getFieldWithDefault(msg, 1, 0),
     role: jspb.Message.getFieldWithDefault(msg, 2, 0),
-    method: jspb.Message.getFieldWithDefault(msg, 3, ""),
     body: msg.getBody_asB64()
   };
 
@@ -1894,10 +1893,6 @@ proto.protocol.AuthMessage.deserializeBinaryFromReader = function(msg, reader) {
     case 2:
       var value = /** @type {!proto.protocol.Role} */ (reader.readEnum());
       msg.setRole(value);
-      break;
-    case 3:
-      var value = /** @type {string} */ (reader.readString());
-      msg.setMethod(value);
       break;
     case 4:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
@@ -1946,13 +1941,6 @@ proto.protocol.AuthMessage.serializeBinaryToWriter = function(message, writer) {
       f
     );
   }
-  f = message.getMethod();
-  if (f.length > 0) {
-    writer.writeString(
-      3,
-      f
-    );
-  }
   f = message.getBody_asU8();
   if (f.length > 0) {
     writer.writeBytes(
@@ -1990,21 +1978,6 @@ proto.protocol.AuthMessage.prototype.getRole = function() {
 /** @param {!proto.protocol.Role} value */
 proto.protocol.AuthMessage.prototype.setRole = function(value) {
   jspb.Message.setProto3EnumField(this, 2, value);
-};
-
-
-/**
- * optional string method = 3;
- * @return {string}
- */
-proto.protocol.AuthMessage.prototype.getMethod = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 3, ""));
-};
-
-
-/** @param {string} value */
-proto.protocol.AuthMessage.prototype.setMethod = function(value) {
-  jspb.Message.setProto3StringField(this, 3, value);
 };
 
 
