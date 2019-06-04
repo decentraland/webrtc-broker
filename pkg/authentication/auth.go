@@ -2,7 +2,7 @@ package authentication
 
 import (
 	"fmt"
-	"net/url"
+	"net/http"
 
 	"github.com/decentraland/webrtc-broker/pkg/protocol"
 )
@@ -16,7 +16,7 @@ type ServerAuthenticator interface {
 
 // CoordinatorAuthenticator is the coordiantor authentication mechanism
 type CoordinatorAuthenticator interface {
-	AuthenticateFromURL(role protocol.Role, qs url.Values) (bool, error)
+	AuthenticateFromURL(role protocol.Role, r *http.Request) (bool, error)
 }
 
 // ClientAuthenticator is the client authentication mechanism, used for simulation only
@@ -34,7 +34,7 @@ func (a *NoopAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []
 }
 
 // AuthenticateFromURL always return true
-func (a *NoopAuthenticator) AuthenticateFromURL(role protocol.Role, qs url.Values) (bool, error) {
+func (a *NoopAuthenticator) AuthenticateFromURL(role protocol.Role, r *http.Request) (bool, error) {
 	return true, nil
 }
 

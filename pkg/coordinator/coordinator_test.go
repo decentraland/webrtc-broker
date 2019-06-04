@@ -3,7 +3,6 @@ package coordinator
 import (
 	"errors"
 	"net/http"
-	"net/url"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -29,8 +28,8 @@ func (m *mockUpgrader) Upgrade(w http.ResponseWriter, r *http.Request) (ws.IWebs
 
 type mockCoordinatorAuthenticator struct{ mock.Mock }
 
-func (m *mockCoordinatorAuthenticator) AuthenticateFromURL(role protocol.Role, qs url.Values) (bool, error) {
-	args := m.Called(role, qs)
+func (m *mockCoordinatorAuthenticator) AuthenticateFromURL(role protocol.Role, r *http.Request) (bool, error) {
+	args := m.Called(role, r)
 	return args.Bool(0), args.Error(1)
 }
 

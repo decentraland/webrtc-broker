@@ -261,9 +261,7 @@ func readPump(state *State, p *Peer) {
 
 // UpgradeRequest upgrades a HTTP request to ws protocol and authenticates for the role
 func UpgradeRequest(state *State, role protocol.Role, w http.ResponseWriter, r *http.Request) (ws.IWebsocket, error) {
-	qs := r.URL.Query()
-
-	isValid, err := state.auth.AuthenticateFromURL(role, qs)
+	isValid, err := state.auth.AuthenticateFromURL(role, r)
 
 	if err != nil {
 		return nil, err
