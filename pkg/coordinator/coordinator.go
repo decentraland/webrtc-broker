@@ -99,8 +99,15 @@ type Config struct {
 
 // MakeState creates a new CoordinatorState
 func MakeState(config *Config) *State {
+	serverSelector := config.ServerSelector
+	if serverSelector == nil {
+		serverSelector = &DefaultServerSelector{
+			ServerAliases: make(map[uint64]bool),
+		}
+	}
+
 	return &State{
-		serverSelector:     config.ServerSelector,
+		serverSelector:     serverSelector,
 		upgrader:           ws.MakeUpgrader(),
 		auth:               config.Auth,
 		marshaller:         &protocol.Marshaller{},

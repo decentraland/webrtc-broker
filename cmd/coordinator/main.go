@@ -22,9 +22,6 @@ func main() {
 	auth := authentication.NoopAuthenticator{}
 
 	config := coordinator.Config{
-		ServerSelector: &coordinator.DefaultServerSelector{
-			ServerAliases: make(map[uint64]bool),
-		},
 		Auth: &auth,
 		Log:  log,
 	}
