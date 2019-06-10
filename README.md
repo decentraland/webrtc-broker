@@ -13,9 +13,9 @@ The whole point of this system is to provide connectivity to the clients. The cl
 The coordinator server is the key entry point of our communications system.
 - It exposes a WS endpoint for the clients to negotiate the communication with the communications server
     - Caveat: It’s very important to notice the coordinator server will choose a communication server randomly, which means all communication servers should be equivalent to each other. That is, a client connected to a cluster, should have a consistent latency no matter which communication server he ends connecting to.
-It exposes a WS endpoint for the communication servers to
-- Negotiate connections with the clients
-- Discover other communications server in the cluster
+- It exposes a WS endpoint for the communication servers to
+    - Negotiate connections with the clients
+    - Discover other communications server in the cluster
 
 
 ### Communication server
