@@ -194,14 +194,14 @@ func makeServer(alias uint64, services services) *peer {
 }
 
 func addPeer(state *State, p *peer) *peer {
-	state.Peers = append(state.Peers, p)
+	state.peers = append(state.peers, p)
 	return p
 }
 
 func TestCoordinatorSend(t *testing.T) {
 	config := makeTestConfig(t)
 	state := makeTestState(t, config)
-	c := coordinator{send: make(chan []byte, 256)}
+	c := coordinator{send: make(chan []byte, 256), log: logrus.New()}
 	defer c.Close()
 
 	msg1 := &protocol.PingMessage{}
@@ -1156,7 +1156,7 @@ func TestUnregister(t *testing.T) {
 
 	Process(state)
 
-	require.Len(t, state.Peers, 0)
+	require.Len(t, state.peers, 0)
 	require.Len(t, state.subscriptions, 0)
 }
 
@@ -1347,7 +1347,7 @@ func TestProcessTopicMessage(t *testing.T) {
 		p2.services = state.services
 		p3.services = state.services
 		p4.services = state.services
-		state.Peers = append(state.Peers, p1, p2, p3, p4)
+		state.peers = append(state.peers, p1, p2, p3, p4)
 
 		state.subscriptions.AddClientSubscription("topic1", p1)
 		state.subscriptions.AddClientSubscription("topic1", p2)
@@ -1396,7 +1396,7 @@ func TestProcessTopicMessage(t *testing.T) {
 
 		p1.services = state.services
 		p2.services = state.services
-		state.Peers = append(state.Peers, p1, p2)
+		state.peers = append(state.peers, p1, p2)
 
 		state.subscriptions.AddClientSubscription("topic1", p1)
 		state.subscriptions.AddClientSubscription("topic1", p2)

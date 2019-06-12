@@ -19,6 +19,12 @@ const (
 	maxMessageSize = 5000 // NOTE let's adjust this later
 )
 
+// Stats expose coordinator stats for reporting purposes
+type Stats struct {
+	ServerCount int
+	ClientCount int
+}
+
 // ErrUnauthorized indicates that a peer is not authorized for the role
 var ErrUnauthorized = errors.New("unauthorized")
 
@@ -27,6 +33,7 @@ type IServerSelector interface {
 	ServerRegistered(server *Peer)
 	ServerUnregistered(server *Peer)
 	GetServerAliasList(forPeer *Peer) []uint64
+	GetServerCount() int
 }
 
 // DefaultServerSelector is the default server selector
@@ -55,6 +62,11 @@ func (r *DefaultServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
 	return peers
 }
 
+// GetServerCount return amount of servers registered
+func (r *DefaultServerSelector) GetServerCount() int {
+	return len(r.ServerAliases)
+}
+
 type inMessage struct {
 	msgType protocol.MessageType
 	from    *Peer
@@ -78,6 +90,8 @@ type State struct {
 	auth           authentication.CoordinatorAuthenticator
 	marshaller     protocol.IMarshaller
 	log            *logging.Logger
+	reporter       func(stats *Stats)
+	reportPeriod   time.Duration
 
 	LastPeerAlias uint64
 
@@ -95,6 +109,8 @@ type Config struct {
 	Log            *logging.Logger
 	ServerSelector IServerSelector
 	Auth           authentication.CoordinatorAuthenticator
+	Reporter       func(stats *Stats)
+	ReportPeriod   time.Duration
 }
 
 // MakeState creates a new CoordinatorState
@@ -106,8 +122,15 @@ func MakeState(config *Config) *State {
 		}
 	}
 
+	reportPeriod := config.ReportPeriod
+	if reportPeriod.Seconds() == 0 {
+		reportPeriod = 30 * time.Second
+	}
+
 	return &State{
 		serverSelector:     serverSelector,
+		reporter:           config.Reporter,
+		reportPeriod:       reportPeriod,
 		upgrader:           ws.MakeUpgrader(),
 		auth:               config.Auth,
 		marshaller:         &protocol.Marshaller{},
@@ -345,15 +368,15 @@ func Start(state *State) {
 				signal(state, inMsg)
 			}
 		case <-ticker.C:
-			clientsCount := 0
-			serversCount := 0
+			if state.reporter != nil {
+				serverCount := state.serverSelector.GetServerCount()
+				clientCount := len(state.Peers) - serverCount
 
-			for _, p := range state.Peers {
-				if p.isServer {
-					serversCount++
-				} else {
-					clientsCount++
+				stats := Stats{
+					ServerCount: serverCount,
+					ClientCount: clientCount,
 				}
+				state.reporter(&stats)
 			}
 
 		case <-state.stop:

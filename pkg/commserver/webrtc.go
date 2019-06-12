@@ -1,11 +1,11 @@
 package commserver
 
 import (
+	"time"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
-
-	pion "github.com/pion/webrtc/v2"
-
 	"github.com/pion/datachannel"
+	pion "github.com/pion/webrtc/v2"
 )
 
 // PeerConnection represents the webrtc connection
@@ -43,6 +43,11 @@ type webRTC struct {
 
 func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 	s := pion.SettingEngine{}
+	s.SetCandidateSelectionTimeout(20 * time.Second)
+	s.SetHostAcceptanceMinWait(0)
+	s.SetSrflxAcceptanceMinWait(0)
+	s.SetPrflxAcceptanceMinWait(0)
+	s.SetRelayAcceptanceMinWait(5 * time.Second)
 
 	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: peerAlias}
 	s.DetachDataChannels()

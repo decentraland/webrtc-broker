@@ -149,38 +149,11 @@ type services struct {
 	Zipper     ZipCompression
 }
 
-// State is the commm server state
-type State struct {
-	reporter                func(state *State)
-	services                services
-	coordinator             *coordinator
-	Peers                   []*peer
-	topicQueue              chan topicChange
-	connectQueue            chan uint64
-	webRtcControlQueue      chan *protocol.WebRtcMessage
-	messagesQueue           chan *peerMessage
-	unregisterQueue         chan *peer
-	stop                    chan bool
-	softStop                bool
-	reportPeriod            time.Duration
-	establishSessionTimeout time.Duration
-
-	Alias uint64
-
-	subscriptions     topicSubscriptions
-	subscriptionsLock sync.RWMutex
-}
-
-func report(state *State) {
-	peersCount := len(state.Peers)
-
-	state.subscriptionsLock.RLock()
-	state.services.Log.WithFields(logging.Fields{
-		"log_type":     "report",
-		"peers count":  peersCount,
-		"topics count": len(state.subscriptions),
-	}).Info("report")
-	state.subscriptionsLock.RUnlock()
+// Stats expose comm server stats for reporting purposes
+type Stats struct {
+	Alias      uint64
+	PeerCount  int
+	TopicCount int
 }
 
 // Config represents the communication server state
@@ -193,8 +166,31 @@ type Config struct {
 	Zipper                  ZipCompression
 	EstablishSessionTimeout time.Duration
 	ReportPeriod            time.Duration
-	Reporter                func(state *State)
+	Reporter                func(stats *Stats)
 	ICEServers              []ICEServer
+	ExitOnCoordinatorClose  bool
+}
+
+// State is the commm server state
+type State struct {
+	reporter                func(stats *Stats)
+	services                services
+	coordinator             *coordinator
+	peers                   []*peer
+	topicQueue              chan topicChange
+	connectQueue            chan uint64
+	webRtcControlQueue      chan *protocol.WebRtcMessage
+	messagesQueue           chan *peerMessage
+	unregisterQueue         chan *peer
+	stop                    chan bool
+	softStop                bool
+	reportPeriod            time.Duration
+	establishSessionTimeout time.Duration
+
+	alias uint64
+
+	subscriptions     topicSubscriptions
+	subscriptionsLock sync.RWMutex
 }
 
 // MakeState creates a new communication server state
@@ -207,10 +203,6 @@ func MakeState(config *Config) (*State, error) {
 	reportPeriod := config.ReportPeriod
 	if reportPeriod.Seconds() == 0 {
 		reportPeriod = 30 * time.Second
-	}
-
-	if config.Reporter == nil {
-		config.Reporter = report
 	}
 
 	ss := services{
@@ -240,11 +232,12 @@ func MakeState(config *Config) (*State, error) {
 	state := &State{
 		services: ss,
 		coordinator: &coordinator{
-			log:  ss.Log,
-			url:  config.CoordinatorURL,
-			send: make(chan []byte, 256),
+			log:         ss.Log,
+			url:         config.CoordinatorURL,
+			send:        make(chan []byte, 256),
+			exitOnClose: config.ExitOnCoordinatorClose,
 		},
-		Peers:                   make([]*peer, 0),
+		peers:                   make([]*peer, 0),
 		subscriptions:           make(topicSubscriptions),
 		stop:                    make(chan bool),
 		unregisterQueue:         make(chan *peer, 255),
@@ -273,7 +266,7 @@ func ConnectCoordinator(state *State) error {
 
 	welcomeMessage := <-welcomeChannel
 
-	state.Alias = welcomeMessage.Alias
+	state.alias = welcomeMessage.Alias
 
 	connectMessage := protocol.ConnectMessage{Type: protocol.MessageType_CONNECT}
 
@@ -370,7 +363,21 @@ func Process(state *State) {
 				processWebRtcControlMessage(state, webRtcMessage)
 			}
 		case <-ticker.C:
-			state.reporter(state)
+			if state.reporter != nil {
+				peerCount := len(state.peers)
+
+				state.subscriptionsLock.RLock()
+				topicCount := len(state.subscriptions)
+				state.subscriptionsLock.RUnlock()
+
+				stats := Stats{
+					Alias:      state.alias,
+					PeerCount:  peerCount,
+					TopicCount: topicCount,
+				}
+
+				state.reporter(&stats)
+			}
 		case <-state.stop:
 			log.Debug("hard stop signal")
 			return
@@ -390,7 +397,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	services := state.services
 	log := services.Log
 	establishSessionTimeout := state.establishSessionTimeout
-	log.WithFields(logging.Fields{"serverAlias": state.Alias, "peer": alias}).Debug("init peer")
+	log.WithFields(logging.Fields{"serverAlias": state.alias, "peer": alias}).Debug("init peer")
 	conn, err := services.WebRtc.newConnection(alias)
 
 	if err != nil {
@@ -402,8 +409,8 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		Alias:           alias,
 		services:        services,
 		Topics:          make(map[string]struct{}),
-		Index:           len(state.Peers),
-		serverAlias:     state.Alias,
+		Index:           len(state.peers),
+		serverAlias:     state.alias,
 		conn:            conn,
 		topicQueue:      state.topicQueue,
 		messagesQueue:   state.messagesQueue,
@@ -438,7 +445,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 
 	unreliableDCReady := make(chan bool)
 
-	state.Peers = append(state.Peers, p)
+	state.peers = append(state.peers, p)
 
 	services.WebRtc.registerOpenHandler(reliableDC, func() {
 		p.log().Info("Reliable data channel open")
@@ -611,15 +618,15 @@ func processUnregister(state *State, p *peer) {
 	alias := p.Alias
 	log.WithField("peer", alias).Debug("unregister peer")
 
-	if state.Peers[p.Index] != p {
+	if state.peers[p.Index] != p {
 		panic("inconsistency detected in peer tracking")
 	}
 
-	size := len(state.Peers)
-	last := state.Peers[size-1]
-	state.Peers[p.Index] = last
+	size := len(state.peers)
+	last := state.peers[size-1]
+	state.peers[p.Index] = last
 	last.Index = p.Index
-	state.Peers = state.Peers[:size-1]
+	state.peers = state.peers[:size-1]
 
 	if p.role == protocol.Role_COMMUNICATION_SERVER {
 		state.subscriptionsLock.Lock()
@@ -649,7 +656,7 @@ func processUnregister(state *State, p *peer) {
 func processConnect(state *State, alias uint64) error {
 	log := state.services.Log
 
-	oldP := findPeer(state.Peers, alias)
+	oldP := findPeer(state.peers, alias)
 	if oldP != nil && !oldP.IsClosed() {
 		processUnregister(state, oldP)
 	}
@@ -750,7 +757,7 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 	log := state.services.Log
 
 	alias := webRtcMessage.FromAlias
-	p := findPeer(state.Peers, alias)
+	p := findPeer(state.peers, alias)
 	if p == nil {
 		np, err := initPeer(state, alias, protocol.Role_UNKNOWN_ROLE)
 		if err != nil {
@@ -878,7 +885,7 @@ func broadcastSubscriptionChange(state *State) error {
 		return err
 	}
 
-	for _, p := range state.Peers {
+	for _, p := range state.peers {
 		if p.role == protocol.Role_COMMUNICATION_SERVER && p.ReliableDC != nil {
 			p.log().Debug("send topic change (to server)")
 			if err := p.WriteReliable(rawMsg); err != nil {

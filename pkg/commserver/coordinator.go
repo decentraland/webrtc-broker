@@ -16,10 +16,11 @@ const (
 )
 
 type coordinator struct {
-	log  *logging.Logger
-	url  string
-	conn ws.IWebsocket
-	send chan []byte
+	log         *logging.Logger
+	url         string
+	conn        ws.IWebsocket
+	send        chan []byte
+	exitOnClose bool
 }
 
 func (c *coordinator) Connect(state *State) error {
@@ -167,4 +168,9 @@ func (c *coordinator) Close() {
 		c.conn.Close()
 	}
 	close(c.send)
+
+	if c.exitOnClose {
+		// TODO reconnect with circuit breaker instead
+		c.log.Fatal("Coordinator connection closed, exiting process")
+	}
 }
