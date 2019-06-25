@@ -81,9 +81,14 @@ func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error
 	i := 0
 	last := len(topics) - 1
 	for topic := range topics {
-		buffer.WriteString(topic)
+		if _, err := buffer.WriteString(topic); err != nil {
+			return err
+		}
+
 		if i != last {
-			buffer.WriteString(" ")
+			if _, err := buffer.WriteString(" "); err != nil {
+				return err
+			}
 		}
 		i++
 	}
@@ -137,7 +142,9 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
 		log.Println("ICE Connection State has changed: ", connectionState.String())
 		if connectionState == pion.ICEConnectionStateDisconnected {
-			conn.Close()
+			if err := conn.Close(); err != nil {
+				log.Println("error closing on disconnect", err)
+			}
 		}
 	})
 
@@ -180,7 +187,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 				bytes := <-client.authMessage
 				_, err := c.WriteDataChannel(bytes, false)
 				if err != nil {
-					log.Println("error writting auth message", err)
+					log.Println("error writing auth message", err)
 					return
 				}
 			} else {
@@ -195,9 +202,8 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 						return
 					}
 
-					_, err := c.WriteDataChannel(bytes, false)
-					if err != nil {
-						log.Println("error writting", err)
+					if _, err := c.WriteDataChannel(bytes, false); err != nil {
+						log.Println("error writing", err)
 						return
 					}
 
@@ -206,7 +212,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 						bytes = <-messagesQueue
 						_, err := c.WriteDataChannel(bytes, false)
 						if err != nil {
-							log.Println("error writting", err)
+							log.Println("error writing", err)
 							return
 						}
 					}
@@ -247,11 +253,11 @@ func Start(config *Config) *Client {
 		log.Fatal(client.startCoordination())
 	}()
 
-	peerData := <-client.PeerData
+	pData := <-client.PeerData
 
-	log.Println("my alias is", peerData.Alias)
+	log.Println("my alias is", pData.Alias)
 
-	if err := client.Connect(peerData.Alias, peerData.AvailableServers[0]); err != nil {
+	if err := client.Connect(pData.Alias, pData.AvailableServers[0]); err != nil {
 		log.Fatal(err)
 	}
 
@@ -277,23 +283,21 @@ func (client *Client) startCoordination() error {
 	}
 
 	client.coordinator = c
-	defer c.Close()
+	defer func() {
+		log.Fatal(c.Close())
+	}()
 
 	go func() {
-		for {
-			select {
-			case bytes, ok := <-client.coordinatorWriteQueue:
-				c.SetWriteDeadline(time.Now().Add(writeWait))
-				if !ok {
-					log.Println("channel closed")
-					return
-				}
+		for bytes := range client.coordinatorWriteQueue {
+			if err := c.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				log.Fatal("set write deadline error", err)
+			}
 
-				if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-					log.Fatal("write coordinator message", err)
-				}
+			if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
+				log.Fatal("write coordinator message", err)
 			}
 		}
+		log.Println("channel closed")
 	}()
 
 	header := protocol.CoordinatorMessage{}

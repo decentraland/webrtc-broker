@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	defaultReportPeriod     = 30 * time.Second
 	maxWorldCommMessageSize = 5120
 	logTopicMessageReceived = false
 )
@@ -46,6 +47,25 @@ func (s *topicSubscription) isEmpty() bool {
 }
 
 type topicSubscriptions map[string]*topicSubscription
+
+func (ts *topicSubscriptions) buildTopicsBuffer() ([]byte, error) {
+	buffer := bytes.Buffer{}
+	i := 0
+	last := len(*ts) - 1
+	for topic := range *ts {
+		if _, err := buffer.WriteString(topic); err != nil {
+			return []byte{}, err
+		}
+
+		if i != last {
+			if _, err := buffer.WriteString(" "); err != nil {
+				return []byte{}, err
+			}
+		}
+		i++
+	}
+	return buffer.Bytes(), nil
+}
 
 func (ts *topicSubscriptions) AddClientSubscription(topic string, client *peer) (subscriptionChanged bool) {
 	s, ok := (*ts)[topic]
@@ -133,7 +153,7 @@ func removePeer(peers []*peer, p *peer) []*peer {
 
 func findPeer(peers []*peer, alias uint64) *peer {
 	for _, p := range peers {
-		if p.Alias == alias {
+		if p.alias == alias {
 			return p
 		}
 	}
@@ -149,13 +169,6 @@ type services struct {
 	Zipper     ZipCompression
 }
 
-// Stats expose comm server stats for reporting purposes
-type Stats struct {
-	Alias      uint64
-	PeerCount  int
-	TopicCount int
-}
-
 // Config represents the communication server state
 type Config struct {
 	CoordinatorURL          string
@@ -166,14 +179,14 @@ type Config struct {
 	Zipper                  ZipCompression
 	EstablishSessionTimeout time.Duration
 	ReportPeriod            time.Duration
-	Reporter                func(stats *Stats)
+	Reporter                func(stats Stats)
 	ICEServers              []ICEServer
 	ExitOnCoordinatorClose  bool
 }
 
 // State is the commm server state
 type State struct {
-	reporter                func(stats *Stats)
+	reporter                func(stats Stats)
 	services                services
 	coordinator             *coordinator
 	peers                   []*peer
@@ -202,7 +215,7 @@ func MakeState(config *Config) (*State, error) {
 
 	reportPeriod := config.ReportPeriod
 	if reportPeriod.Seconds() == 0 {
-		reportPeriod = 30 * time.Second
+		reportPeriod = defaultReportPeriod
 	}
 
 	ss := services{
@@ -272,7 +285,10 @@ func ConnectCoordinator(state *State) error {
 
 	for _, alias := range welcomeMessage.AvailableServers {
 		connectMessage.ToAlias = alias
-		c.Send(state, &connectMessage)
+		if err := c.Send(state, &connectMessage); err != nil {
+			state.services.Log.WithError(err).Error("error processing coordinator welcome")
+			return err
+		}
 
 		_, err := initPeer(state, alias, protocol.Role_COMMUNICATION_SERVER)
 		if err != nil {
@@ -332,52 +348,44 @@ func Process(state *State) {
 	ticker := time.NewTicker(state.reportPeriod)
 	defer ticker.Stop()
 
+	ignoreError := func(err error) {
+		if err != nil {
+			log.WithError(err).Debug("ignoring error")
+		}
+	}
+
 	for {
 		select {
 		case alias := <-state.connectQueue:
-			processConnect(state, alias)
+			ignoreError(processConnect(state, alias))
 			n := len(state.connectQueue)
 			for i := 0; i < n; i++ {
 				alias := <-state.connectQueue
-				processConnect(state, alias)
+				ignoreError(processConnect(state, alias))
 			}
 		case change := <-state.topicQueue:
-			processSubscriptionChange(state, change)
+			ignoreError(processSubscriptionChange(state, change))
 			n := len(state.topicQueue)
 			for i := 0; i < n; i++ {
 				change := <-state.topicQueue
-				processSubscriptionChange(state, change)
+				ignoreError(processSubscriptionChange(state, change))
 			}
 		case p := <-state.unregisterQueue:
-			processUnregister(state, p)
+			ignoreError(processUnregister(state, p))
 			n := len(state.unregisterQueue)
 			for i := 0; i < n; i++ {
 				p = <-state.unregisterQueue
-				processUnregister(state, p)
+				ignoreError(processUnregister(state, p))
 			}
 		case webRtcMessage := <-state.webRtcControlQueue:
-			processWebRtcControlMessage(state, webRtcMessage)
+			ignoreError(processWebRtcControlMessage(state, webRtcMessage))
 			n := len(state.webRtcControlQueue)
 			for i := 0; i < n; i++ {
 				webRtcMessage = <-state.webRtcControlQueue
-				processWebRtcControlMessage(state, webRtcMessage)
+				ignoreError(processWebRtcControlMessage(state, webRtcMessage))
 			}
 		case <-ticker.C:
-			if state.reporter != nil {
-				peerCount := len(state.peers)
-
-				state.subscriptionsLock.RLock()
-				topicCount := len(state.subscriptions)
-				state.subscriptionsLock.RUnlock()
-
-				stats := Stats{
-					Alias:      state.alias,
-					PeerCount:  peerCount,
-					TopicCount: topicCount,
-				}
-
-				state.reporter(&stats)
-			}
+			report(state)
 		case <-state.stop:
 			log.Debug("hard stop signal")
 			return
@@ -394,11 +402,11 @@ func Process(state *State) {
 }
 
 func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
-	services := state.services
-	log := services.Log
+	s := state.services
+	log := s.Log
 	establishSessionTimeout := state.establishSessionTimeout
 	log.WithFields(logging.Fields{"serverAlias": state.alias, "peer": alias}).Debug("init peer")
-	conn, err := services.WebRtc.newConnection(alias)
+	conn, err := s.WebRtc.newConnection(alias)
 
 	if err != nil {
 		log.WithError(err).Error("error creating new peer connection")
@@ -406,10 +414,10 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	}
 
 	p := &peer{
-		Alias:           alias,
-		services:        services,
-		Topics:          make(map[string]struct{}),
-		Index:           len(state.peers),
+		alias:           alias,
+		services:        s,
+		topics:          make(map[string]struct{}),
+		index:           len(state.peers),
 		serverAlias:     state.alias,
 		conn:            conn,
 		topicQueue:      state.topicQueue,
@@ -429,17 +437,23 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		}
 	})
 
-	reliableDC, err := services.WebRtc.createReliableDataChannel(conn)
+	p.reliableDC, err = s.WebRtc.createReliableDataChannel(conn)
 	if err != nil {
 		p.logError(err).Error("cannot create new reliable data channel")
-		conn.Close()
+		if err = conn.Close(); err != nil {
+			p.logError(err).Debug("error closing connection")
+			return nil, err
+		}
 		return nil, err
 	}
 
-	unreliableDC, err := services.WebRtc.createUnreliableDataChannel(conn)
+	p.unreliableDC, err = s.WebRtc.createUnreliableDataChannel(conn)
 	if err != nil {
 		p.logError(err).Error("cannot create new unreliable data channel")
-		conn.Close()
+		if err = conn.Close(); err != nil {
+			p.logError(err).Debug("error closing connection")
+			return nil, err
+		}
 		return nil, err
 	}
 
@@ -447,16 +461,16 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 
 	state.peers = append(state.peers, p)
 
-	services.WebRtc.registerOpenHandler(reliableDC, func() {
+	s.WebRtc.registerOpenHandler(p.reliableDC, func() {
 		p.log().Info("Reliable data channel open")
 
-		d, err := services.WebRtc.detach(reliableDC)
+		d, err := s.WebRtc.detach(p.reliableDC)
 		if err != nil {
 			p.logError(err).Error("cannot detach data channel")
 			p.Close()
 			return
 		}
-		p.ReliableDC = d
+		p.reliableRWC = d
 
 		if role == protocol.Role_UNKNOWN_ROLE {
 			p.log().Debug("unknown role, waiting for auth message")
@@ -471,7 +485,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 			}
 
 			rawMsg := buffer[:n]
-			if err := services.Marshaller.Unmarshal(rawMsg, &header); err != nil {
+			if err = s.Marshaller.Unmarshal(rawMsg, &header); err != nil {
 				p.logError(err).Error("decode auth header message failure")
 				p.Close()
 				return
@@ -488,7 +502,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 			}
 
 			authMessage := protocol.AuthMessage{}
-			if err := services.Marshaller.Unmarshal(rawMsg, &authMessage); err != nil {
+			if err = s.Marshaller.Unmarshal(rawMsg, &authMessage); err != nil {
 				p.logError(err).Error("decode auth message failure")
 				p.Close()
 				return
@@ -500,7 +514,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 				return
 			}
 
-			isValid, err := services.Auth.AuthenticateFromMessage(authMessage.Role, authMessage.Body)
+			isValid, err := s.Auth.AuthenticateFromMessage(authMessage.Role, authMessage.Body)
 			if err != nil {
 				p.logError(err).Error("authentication error")
 				p.Close()
@@ -512,19 +526,15 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 				p.log().Debug("peer authorized")
 				if p.role == protocol.Role_COMMUNICATION_SERVER {
 					state.subscriptionsLock.Lock()
-					buffer := bytes.Buffer{}
-					i := 0
-					last := len(state.subscriptions) - 1
-					for topic := range state.subscriptions {
-						buffer.WriteString(topic)
-						if i != last {
-							buffer.WriteString(" ")
-						}
-						i++
-					}
+					topics, err := state.subscriptions.buildTopicsBuffer()
 					state.subscriptionsLock.Unlock()
+					if err != nil {
+						p.logError(err).Error("build topic buffer error")
+						p.Close()
+						return
+					}
 
-					zipped, err := state.services.Zipper.Zip(buffer.Bytes())
+					zipped, err := state.services.Zipper.Zip(topics)
 					if err != nil {
 						p.logError(err).Error("zip failure")
 						p.Close()
@@ -556,7 +566,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 			}
 		} else {
 			p.log().Debug("role already identified, sending auth message")
-			authMessage, err := services.Auth.GenerateServerAuthMessage()
+			authMessage, err := s.Auth.GenerateServerAuthMessage()
 
 			if err != nil {
 				p.logError(err).Error("cannot create auth message")
@@ -564,7 +574,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 				return
 			}
 
-			rawMsg, err := services.Marshaller.Marshal(authMessage)
+			rawMsg, err := s.Marshaller.Marshal(authMessage)
 			if err != nil {
 				p.logError(err).Error("cannot encode auth message")
 				p.Close()
@@ -584,21 +594,21 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		go p.readUnreliablePump()
 	})
 
-	services.WebRtc.registerOpenHandler(unreliableDC, func() {
+	s.WebRtc.registerOpenHandler(p.unreliableDC, func() {
 		p.log().Info("Unreliable data channel open")
-		d, err := services.WebRtc.detach(unreliableDC)
+		d, err := s.WebRtc.detach(p.unreliableDC)
 		if err != nil {
 			p.logError(err).Error("cannot detach datachannel")
 			p.Close()
 			return
 		}
-		p.UnreliableDC = d
+		p.unreliableRWC = d
 		unreliableDCReady <- true
 	})
 
 	go func() {
 		time.Sleep(establishSessionTimeout)
-		if services.WebRtc.isNew(conn) {
+		if s.WebRtc.isNew(conn) {
 			p.log().
 				Info("ICEConnectionStateNew after establish timeout, closing connection and queued to unregister")
 			p.Close()
@@ -608,29 +618,30 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	return p, nil
 }
 
-func processUnregister(state *State, p *peer) {
-	if p.Index == -1 {
-		return
+func processUnregister(state *State, p *peer) error {
+	if p.index == -1 {
+		return nil
 	}
 
 	log := state.services.Log
 
-	alias := p.Alias
+	alias := p.alias
 	log.WithField("peer", alias).Debug("unregister peer")
 
-	if state.peers[p.Index] != p {
+	if state.peers[p.index] != p {
+		log.WithField("peer", alias).Error("inconsistency detected in peer tracking")
 		panic("inconsistency detected in peer tracking")
 	}
 
 	size := len(state.peers)
 	last := state.peers[size-1]
-	state.peers[p.Index] = last
-	last.Index = p.Index
+	state.peers[p.index] = last
+	last.index = p.index
 	state.peers = state.peers[:size-1]
 
 	if p.role == protocol.Role_COMMUNICATION_SERVER {
 		state.subscriptionsLock.Lock()
-		for topic := range p.Topics {
+		for topic := range p.topics {
 			state.subscriptions.RemoveServerSubscription(topic, p)
 		}
 		state.subscriptionsLock.Unlock()
@@ -638,7 +649,7 @@ func processUnregister(state *State, p *peer) {
 		topicsChanged := false
 
 		state.subscriptionsLock.Lock()
-		for topic := range p.Topics {
+		for topic := range p.topics {
 			if state.subscriptions.RemoveClientSubscription(topic, p) {
 				topicsChanged = true
 			}
@@ -646,11 +657,12 @@ func processUnregister(state *State, p *peer) {
 		state.subscriptionsLock.Unlock()
 
 		if topicsChanged {
-			broadcastSubscriptionChange(state)
+			return broadcastSubscriptionChange(state)
 		}
 	}
 
-	p.Index = -1
+	p.index = -1
+	return nil
 }
 
 func processConnect(state *State, alias uint64) error {
@@ -658,7 +670,9 @@ func processConnect(state *State, alias uint64) error {
 
 	oldP := findPeer(state.peers, alias)
 	if oldP != nil && !oldP.IsClosed() {
-		processUnregister(state, oldP)
+		if err := processUnregister(state, oldP); err != nil {
+			return err
+		}
 	}
 
 	p, err := initPeer(state, alias, protocol.Role_UNKNOWN_ROLE)
@@ -672,12 +686,11 @@ func processConnect(state *State, alias uint64) error {
 		return err
 	}
 
-	state.coordinator.Send(state, &protocol.WebRtcMessage{
+	return state.coordinator.Send(state, &protocol.WebRtcMessage{
 		Type:    protocol.MessageType_WEBRTC_OFFER,
 		Sdp:     offer,
 		ToAlias: alias,
 	})
-	return nil
 }
 
 func processSubscriptionChange(state *State, change topicChange) error {
@@ -707,19 +720,17 @@ func processSubscriptionChange(state *State, change topicChange) error {
 
 			newTopics[i] = topic
 
-			if _, ok := p.Topics[topic]; ok {
+			if _, ok := p.topics[topic]; ok {
 				continue
 			}
 
-			p.Topics[topic] = struct{}{}
+			p.topics[topic] = struct{}{}
 
 			state.subscriptionsLock.Lock()
 			if p.role == protocol.Role_COMMUNICATION_SERVER {
 				state.subscriptions.AddServerSubscription(topic, p)
-			} else {
-				if state.subscriptions.AddClientSubscription(topic, p) {
-					topicsChanged = true
-				}
+			} else if state.subscriptions.AddClientSubscription(topic, p) {
+				topicsChanged = true
 			}
 			state.subscriptionsLock.Unlock()
 		}
@@ -728,20 +739,18 @@ func processSubscriptionChange(state *State, change topicChange) error {
 	sort.Strings(newTopics)
 
 	// NOTE: check if topics were deleted
-	for topic := range p.Topics {
+	for topic := range p.topics {
 		if sort.SearchStrings(newTopics, topic) < len(newTopics) {
 			continue
 		}
 
-		delete(p.Topics, topic)
+		delete(p.topics, topic)
 
 		state.subscriptionsLock.Lock()
 		if p.role == protocol.Role_COMMUNICATION_SERVER {
 			state.subscriptions.RemoveServerSubscription(topic, p)
-		} else {
-			if state.subscriptions.RemoveClientSubscription(topic, p) {
-				topicsChanged = true
-			}
+		} else if state.subscriptions.RemoveClientSubscription(topic, p) {
+			topicsChanged = true
 		}
 		state.subscriptionsLock.Unlock()
 	}
@@ -775,10 +784,10 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 			return err
 		}
 
-		state.coordinator.Send(state, &protocol.WebRtcMessage{
+		return state.coordinator.Send(state, &protocol.WebRtcMessage{
 			Type:    protocol.MessageType_WEBRTC_ANSWER,
 			Sdp:     answer,
-			ToAlias: p.Alias,
+			ToAlias: p.alias,
 		})
 	case protocol.MessageType_WEBRTC_ANSWER:
 		p.log().Debug("webrtc answer received")
@@ -856,19 +865,13 @@ func broadcastSubscriptionChange(state *State) error {
 	log := state.services.Log
 
 	state.subscriptionsLock.RLock()
-	buffer := bytes.Buffer{}
-	i := 0
-	last := len(state.subscriptions) - 1
-	for topic := range state.subscriptions {
-		buffer.WriteString(topic)
-		if i != last {
-			buffer.WriteString(" ")
-		}
-		i++
-	}
+	topics, err := state.subscriptions.buildTopicsBuffer()
 	state.subscriptionsLock.RUnlock()
+	if err != nil {
+		return err
+	}
 
-	encodedTopics, err := state.services.Zipper.Zip(buffer.Bytes())
+	encodedTopics, err := state.services.Zipper.Zip(topics)
 	if err != nil {
 		return err
 	}
@@ -886,7 +889,7 @@ func broadcastSubscriptionChange(state *State) error {
 	}
 
 	for _, p := range state.peers {
-		if p.role == protocol.Role_COMMUNICATION_SERVER && p.ReliableDC != nil {
+		if p.role == protocol.Role_COMMUNICATION_SERVER && p.reliableRWC != nil {
 			p.log().Debug("send topic change (to server)")
 			if err := p.WriteReliable(rawMsg); err != nil {
 				continue

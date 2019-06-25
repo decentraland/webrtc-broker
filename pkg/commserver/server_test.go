@@ -2,6 +2,7 @@ package commserver
 
 import (
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
+	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/sirupsen/logrus"
@@ -90,10 +92,6 @@ func (m *mockWebRtc) registerOpenHandler(dc *DataChannel, handler func()) {
 	m.Called(dc, handler)
 }
 
-func (m *mockWebRtc) invokeOpenHandler(dc *DataChannel) {
-	m.Called(dc)
-}
-
 func (m *mockWebRtc) createOffer(conn *PeerConnection) (string, error) {
 	args := m.Called(conn)
 	return args.String(0), args.Error(1)
@@ -124,9 +122,14 @@ func (m *mockWebRtc) isNew(conn *PeerConnection) bool {
 	return args.Bool(0)
 }
 
-func (m *mockWebRtc) close(conn *PeerConnection) error {
+func (m *mockWebRtc) close(conn io.Closer) error {
 	args := m.Called(conn)
 	return args.Error(0)
+}
+
+func (m *mockWebRtc) getStats(conn *PeerConnection) pion.StatsReport {
+	args := m.Called(conn)
+	return args.Get(0).(pion.StatsReport)
 }
 
 func makeDefaultMockWebRtc() *mockWebRtc {
@@ -137,21 +140,17 @@ func makeDefaultMockWebRtc() *mockWebRtc {
 	return mockWebRtc
 }
 
-func makeTestServicesWithWebRtc(t *testing.T, webRtc *mockWebRtc) services {
-	services := services{
+func makeTestServices(webRtc *mockWebRtc) services {
+	s := services{
 		Marshaller: &protocol.Marshaller{},
 		WebRtc:     webRtc,
 		Log:        logrus.New(),
 		Zipper:     &GzipCompression{},
 	}
-	return services
+	return s
 }
 
-func makeTestServices(t *testing.T) services {
-	return makeTestServicesWithWebRtc(t, makeDefaultMockWebRtc())
-}
-
-func makeTestConfigWithWebRtc(t *testing.T, auth *mockServerAuthenticator, webRtc *mockWebRtc) *Config {
+func makeTestConfigWithWebRtc(auth authentication.ServerAuthenticator, webRtc *mockWebRtc) *Config {
 	logger := logrus.New()
 	config := &Config{
 		Auth:                    auth,
@@ -163,8 +162,8 @@ func makeTestConfigWithWebRtc(t *testing.T, auth *mockServerAuthenticator, webRt
 	return config
 }
 
-func makeTestConfig(t *testing.T) *Config {
-	return makeTestConfigWithWebRtc(t, nil, makeDefaultMockWebRtc())
+func makeTestConfig() *Config {
+	return makeTestConfigWithWebRtc(nil, makeDefaultMockWebRtc())
 }
 
 func makeTestState(t *testing.T, config *Config) *State {
@@ -173,22 +172,22 @@ func makeTestState(t *testing.T, config *Config) *State {
 	return state
 }
 
-func makeClient(alias uint64, services services) *peer {
+func makeClient(alias uint64, ss services) *peer {
 	return &peer{
-		services: services,
-		Alias:    alias,
+		services: ss,
+		alias:    alias,
 		conn:     &pion.PeerConnection{},
-		Topics:   make(map[string]struct{}),
+		topics:   make(map[string]struct{}),
 		role:     protocol.Role_CLIENT,
 	}
 }
 
-func makeServer(alias uint64, services services) *peer {
+func makeServer(alias uint64, ss services) *peer {
 	return &peer{
-		services: services,
-		Alias:    alias,
+		services: ss,
+		alias:    alias,
 		conn:     &pion.PeerConnection{},
-		Topics:   make(map[string]struct{}),
+		topics:   make(map[string]struct{}),
 		role:     protocol.Role_COMMUNICATION_SERVER,
 	}
 }
@@ -199,7 +198,7 @@ func addPeer(state *State, p *peer) *peer {
 }
 
 func TestCoordinatorSend(t *testing.T) {
-	config := makeTestConfig(t)
+	config := makeTestConfig()
 	state := makeTestState(t, config)
 	c := coordinator{send: make(chan []byte, 256), log: logrus.New()}
 	defer c.Close()
@@ -225,7 +224,7 @@ func TestCoordinatorReadPump(t *testing.T) {
 		auth := &mockServerAuthenticator{}
 		auth.On("GenerateServerAuthMessage").Return(&protocol.AuthMessage{}, nil).Once()
 
-		config := makeTestConfig(t)
+		config := makeTestConfig()
 		config.Auth = auth
 		state := makeTestState(t, config)
 
@@ -316,7 +315,7 @@ func TestCoordinatorWritePump(t *testing.T) {
 	msg, err := proto.Marshal(&protocol.PingMessage{})
 	require.NoError(t, err)
 
-	config := makeTestConfig(t)
+	config := makeTestConfig()
 	state := makeTestState(t, config)
 	conn := &MockWebsocket{}
 	conn.
@@ -336,9 +335,9 @@ func TestCoordinatorWritePump(t *testing.T) {
 
 func TestTopicSubscriptions(t *testing.T) {
 	t.Run("add client subscription", func(t *testing.T) {
-		services := makeTestServices(t)
-		c1 := makeClient(1, services)
-		c2 := makeClient(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		c1 := makeClient(1, ss)
+		c2 := makeClient(2, ss)
 		subscriptions := make(topicSubscriptions)
 
 		require.True(t, subscriptions.AddClientSubscription("topic1", c1))
@@ -358,9 +357,9 @@ func TestTopicSubscriptions(t *testing.T) {
 	})
 
 	t.Run("add server subscription", func(t *testing.T) {
-		services := makeTestServices(t)
-		s1 := makeServer(1, services)
-		s2 := makeServer(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		s1 := makeServer(1, ss)
+		s2 := makeServer(2, ss)
 		subscriptions := make(topicSubscriptions)
 
 		require.True(t, subscriptions.AddServerSubscription("topic1", s1))
@@ -380,9 +379,9 @@ func TestTopicSubscriptions(t *testing.T) {
 	})
 
 	t.Run("remove client subscription", func(t *testing.T) {
-		services := makeTestServices(t)
-		c1 := makeClient(1, services)
-		c2 := makeClient(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		c1 := makeClient(1, ss)
+		c2 := makeClient(2, ss)
 		subscriptions := make(topicSubscriptions)
 		subscriptions["topic1"] = &topicSubscription{
 			clients: []*peer{c1, c2},
@@ -402,9 +401,9 @@ func TestTopicSubscriptions(t *testing.T) {
 	})
 
 	t.Run("remove server subscription", func(t *testing.T) {
-		services := makeTestServices(t)
-		s1 := makeServer(1, services)
-		s2 := makeServer(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		s1 := makeServer(1, ss)
+		s2 := makeServer(2, ss)
 		subscriptions := make(topicSubscriptions)
 		subscriptions["topic1"] = &topicSubscription{
 			clients: make([]*peer, 0),
@@ -424,9 +423,9 @@ func TestTopicSubscriptions(t *testing.T) {
 	})
 
 	t.Run("remove client subscription, but server left", func(t *testing.T) {
-		services := makeTestServices(t)
-		c1 := makeClient(1, services)
-		s1 := makeServer(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		c1 := makeClient(1, ss)
+		s1 := makeServer(2, ss)
 		subscriptions := make(topicSubscriptions)
 		subscriptions["topic1"] = &topicSubscription{
 			clients: []*peer{c1},
@@ -445,9 +444,9 @@ func TestTopicSubscriptions(t *testing.T) {
 	})
 
 	t.Run("remove server subscription, but client left", func(t *testing.T) {
-		services := makeTestServices(t)
-		c1 := makeClient(1, services)
-		s1 := makeServer(2, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		c1 := makeClient(1, ss)
+		s1 := makeServer(2, ss)
 		subscriptions := make(topicSubscriptions)
 		subscriptions["topic1"] = &topicSubscription{
 			clients: []*peer{c1},
@@ -474,7 +473,6 @@ type authExchangeTestConfig struct {
 
 type authExchangeTest struct {
 	t             *testing.T
-	state         *State
 	ReliableDC    *DataChannel
 	UnreliableDC  *DataChannel
 	ReliableRWC   *mockReadWriteCloser
@@ -511,7 +509,7 @@ func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
 func TestInitPeer(t *testing.T) {
 	t.Run("if no connection is establish eventually the peer is unregistered", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		conn := &pion.PeerConnection{}
 		reliableDC := &pion.DataChannel{}
@@ -533,7 +531,7 @@ func TestInitPeer(t *testing.T) {
 		require.NoError(t, err)
 
 		p := <-state.unregisterQueue
-		require.Equal(t, uint64(1), p.Alias)
+		require.Equal(t, uint64(1), p.alias)
 	})
 
 	t.Run("auth exchange: first message is not auth", func(t *testing.T) {
@@ -541,7 +539,7 @@ func TestInitPeer(t *testing.T) {
 		auth := &mockServerAuthenticator{}
 		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
 
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -583,7 +581,7 @@ func TestInitPeer(t *testing.T) {
 	t.Run("auth exchange: invalid role received in auth message", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -628,7 +626,7 @@ func TestInitPeer(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
 		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(false, nil)
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -673,7 +671,7 @@ func TestInitPeer(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
 		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -723,7 +721,7 @@ func TestInitPeer(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
 		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -773,7 +771,7 @@ func TestInitPeer(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
 		auth.On("GenerateServerAuthMessage").Return(&protocol.AuthMessage{}, nil).Once()
-		config := makeTestConfigWithWebRtc(t, auth, webRtc)
+		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
 			config: config,
@@ -822,15 +820,15 @@ func TestReadReliablePump(t *testing.T) {
 		encodedMsg, err := proto.Marshal(msg)
 		require.NoError(t, err)
 
-		services := makeTestServices(t)
-		p := makeClient(alias, services)
+		ss := makeTestServices(makeDefaultMockWebRtc())
+		p := makeClient(alias, ss)
 		p.messagesQueue = make(chan *peerMessage, 255)
 		p.topicQueue = make(chan topicChange, 255)
 		p.unregisterQueue = make(chan *peer, 255)
-		reliableDC := mockReadWriteCloser{}
-		p.ReliableDC = &reliableDC
+		reliableRWC := mockReadWriteCloser{}
+		p.reliableRWC = &reliableRWC
 
-		reliableDC.
+		reliableRWC.
 			On("Read", mock.Anything).Run(func(args mock.Arguments) {
 			arg := args.Get(0).([]byte)
 			copy(arg, encodedMsg)
@@ -852,7 +850,7 @@ func TestReadReliablePump(t *testing.T) {
 
 		require.Len(t, p.topicQueue, 1)
 		change := <-p.topicQueue
-		require.Equal(t, uint64(1), change.peer.Alias)
+		require.Equal(t, uint64(1), change.peer.alias)
 		require.Equal(t, change.rawTopics, msg.Topics)
 	})
 
@@ -890,8 +888,8 @@ func TestReadReliablePump(t *testing.T) {
 
 func TestReadUnreliablePump(t *testing.T) {
 	setup := func(t *testing.T, alias uint64, msg proto.Message, webRtc *mockWebRtc) *peer {
-		services := makeTestServicesWithWebRtc(t, webRtc)
-		p := makeClient(alias, services)
+		ss := makeTestServices(webRtc)
+		p := makeClient(alias, ss)
 		p.messagesQueue = make(chan *peerMessage, 255)
 		p.topicQueue = make(chan topicChange, 255)
 		p.unregisterQueue = make(chan *peer, 255)
@@ -899,9 +897,9 @@ func TestReadUnreliablePump(t *testing.T) {
 		encodedMsg, err := proto.Marshal(msg)
 		require.NoError(t, err)
 
-		unreliableDC := mockReadWriteCloser{}
-		p.UnreliableDC = &unreliableDC
-		unreliableDC.
+		unreliableRWC := mockReadWriteCloser{}
+		p.unreliableRWC = &unreliableRWC
+		unreliableRWC.
 			On("Read", mock.Anything).Run(func(args mock.Arguments) {
 			arg := args.Get(0).([]byte)
 			copy(arg, encodedMsg)
@@ -963,7 +961,7 @@ func TestProcessConnect(t *testing.T) {
 			On("createReliableDataChannel", mock.Anything).Return(dc, nil).
 			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -995,7 +993,7 @@ func TestProcessConnect(t *testing.T) {
 			On("createReliableDataChannel", conn).Return(dc, nil).
 			On("createUnreliableDataChannel", conn).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1016,16 +1014,16 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	setupPeer := func(state *State, alias uint64, role protocol.Role) *peer {
 		p := &peer{
 			services: state.services,
-			Alias:    alias,
+			alias:    alias,
 			role:     role,
-			Topics:   make(map[string]struct{}),
+			topics:   make(map[string]struct{}),
 		}
 
 		return addPeer(state, p)
 	}
 
 	t.Run("add topic from clients", func(t *testing.T) {
-		config := makeTestConfig(t)
+		config := makeTestConfig()
 		state := makeTestState(t, config)
 		defer closeState(state)
 
@@ -1033,9 +1031,9 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
 
 		s1 := setupPeer(state, 3, protocol.Role_COMMUNICATION_SERVER)
-		s1ReliableDC := mockReadWriteCloser{}
-		s1.ReliableDC = &s1ReliableDC
-		s1ReliableDC.On("Write", mock.Anything).Return(0, nil)
+		s1ReliableRWC := mockReadWriteCloser{}
+		s1.reliableRWC = &s1ReliableRWC
+		s1ReliableRWC.On("Write", mock.Anything).Return(0, nil)
 
 		state.topicQueue <- topicChange{
 			peer:      c1,
@@ -1057,23 +1055,23 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		require.Len(t, state.subscriptions["topic1"].servers, 0)
 		require.Contains(t, state.subscriptions["topic1"].clients, c1)
 		require.Contains(t, state.subscriptions["topic1"].clients, c2)
-		s1ReliableDC.AssertExpectations(t)
+		s1ReliableRWC.AssertExpectations(t)
 
-		require.Len(t, c1.Topics, 1)
-		require.Contains(t, c1.Topics, "topic1")
-		require.Len(t, c2.Topics, 1)
-		require.Contains(t, c2.Topics, "topic1")
+		require.Len(t, c1.topics, 1)
+		require.Contains(t, c1.topics, "topic1")
+		require.Len(t, c2.topics, 1)
+		require.Contains(t, c2.topics, "topic1")
 	})
 
 	t.Run("server to server, but second server is not subscribed", func(t *testing.T) {
-		config := makeTestConfig(t)
+		config := makeTestConfig()
 		state := makeTestState(t, config)
 		defer closeState(state)
 
 		s1 := setupPeer(state, 1, protocol.Role_COMMUNICATION_SERVER)
 		s2 := setupPeer(state, 2, protocol.Role_COMMUNICATION_SERVER)
-		s2ReliableDC := mockReadWriteCloser{}
-		s2.ReliableDC = &s2ReliableDC
+		s2ReliableRWC := mockReadWriteCloser{}
+		s2.reliableRWC = &s2ReliableRWC
 
 		state.topicQueue <- topicChange{
 			peer:      s1,
@@ -1088,26 +1086,26 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		require.Len(t, state.subscriptions["topic1"].servers, 1)
 		require.Contains(t, state.subscriptions["topic1"].servers, s1)
 
-		s2ReliableDC.AssertExpectations(t)
+		s2ReliableRWC.AssertExpectations(t)
 
-		require.Len(t, s1.Topics, 1)
-		require.Contains(t, s1.Topics, "topic1")
+		require.Len(t, s1.topics, 1)
+		require.Contains(t, s1.topics, "topic1")
 	})
 
 	t.Run("remove topic from clients", func(t *testing.T) {
-		config := makeTestConfig(t)
+		config := makeTestConfig()
 		state := makeTestState(t, config)
 		defer closeState(state)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
-		c1.Topics["topic1"] = struct{}{}
+		c1.topics["topic1"] = struct{}{}
 		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
-		c2.Topics["topic1"] = struct{}{}
+		c2.topics["topic1"] = struct{}{}
 
 		s1 := setupPeer(state, 3, protocol.Role_COMMUNICATION_SERVER)
-		s1ReliableDC := mockReadWriteCloser{}
-		s1.ReliableDC = &s1ReliableDC
-		s1ReliableDC.On("Write", mock.Anything).Return(0, nil)
+		s1ReliableRWC := mockReadWriteCloser{}
+		s1.reliableRWC = &s1ReliableRWC
+		s1ReliableRWC.On("Write", mock.Anything).Return(0, nil)
 
 		state.subscriptions.AddClientSubscription("topic1", c1)
 		state.subscriptions.AddClientSubscription("topic1", c2)
@@ -1129,23 +1127,23 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		Process(state)
 
 		require.Len(t, state.subscriptions, 0)
-		require.Len(t, c1.Topics, 0)
-		require.Len(t, c2.Topics, 0)
+		require.Len(t, c1.topics, 0)
+		require.Len(t, c2.topics, 0)
 
-		s1ReliableDC.AssertExpectations(t)
+		s1ReliableRWC.AssertExpectations(t)
 	})
 }
 
 func TestUnregister(t *testing.T) {
-	config := makeTestConfig(t)
+	config := makeTestConfig()
 	state := makeTestState(t, config)
 	defer closeState(state)
 
 	p := addPeer(state, makeClient(1, state.services))
-	p.Topics["topic1"] = struct{}{}
+	p.topics["topic1"] = struct{}{}
 
 	p2 := addPeer(state, makeClient(2, state.services))
-	p2.Topics["topic1"] = struct{}{}
+	p2.topics["topic1"] = struct{}{}
 
 	state.subscriptions.AddClientSubscription("topic1", p)
 	state.subscriptions.AddClientSubscription("topic1", p2)
@@ -1174,7 +1172,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			On("createReliableDataChannel", conn).Return(dc, nil).Once().
 			On("createUnreliableDataChannel", conn).Return(dc, nil).Once().
 			On("registerOpenHandler", mock.Anything, mock.Anything)
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1200,7 +1198,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", nil).Twice()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1211,13 +1209,13 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p.Alias,
+			FromAlias: p.alias,
 		}
 
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p2.Alias,
+			FromAlias: p2.alias,
 		}
 
 		state.softStop = true
@@ -1232,7 +1230,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", errors.New("offer error")).Once()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1241,7 +1239,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Sdp:       "sdp-offer",
-			FromAlias: p.Alias,
+			FromAlias: p.alias,
 		}
 
 		state.softStop = true
@@ -1256,7 +1254,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onAnswer", mock.Anything, "sdp-answer").Return(nil).Once()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1265,7 +1263,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ANSWER,
 			Sdp:       "sdp-answer",
-			FromAlias: p.Alias,
+			FromAlias: p.alias,
 		}
 
 		state.softStop = true
@@ -1279,7 +1277,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onIceCandidate", mock.Anything, "sdp-candidate").Return(nil).Once()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
@@ -1289,7 +1287,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ICE_CANDIDATE,
 			Sdp:       "sdp-candidate",
-			FromAlias: p.Alias,
+			FromAlias: p.alias,
 		}
 
 		state.softStop = true
@@ -1303,43 +1301,37 @@ func TestProcessWebRtcMessage(t *testing.T) {
 func TestProcessTopicMessage(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		p1 := &peer{
-			Alias: 1,
-			conn:  &pion.PeerConnection{},
-			Topics: map[string]struct{}{
-				"topic1": struct{}{},
-			},
+			alias:  1,
+			conn:   &pion.PeerConnection{},
+			topics: map[string]struct{}{"topic1": {}},
 		}
 
-		p2ReliableDC := &mockReadWriteCloser{}
-		p2ReliableDC.On("Write", mock.Anything).Return(0, nil).Once()
+		p2ReliableRWC := &mockReadWriteCloser{}
+		p2ReliableRWC.On("Write", mock.Anything).Return(0, nil).Once()
 		p2 := &peer{
-			Alias:      2,
-			ReliableDC: p2ReliableDC,
-			conn:       &pion.PeerConnection{},
-			Topics: map[string]struct{}{
-				"topic1": struct{}{},
-			},
+			alias:       2,
+			reliableRWC: p2ReliableRWC,
+			conn:        &pion.PeerConnection{},
+			topics:      map[string]struct{}{"topic1": {}},
 		}
 
 		p3 := &peer{
-			Alias:  3,
+			alias:  3,
 			conn:   &pion.PeerConnection{},
-			Topics: make(map[string]struct{}),
+			topics: make(map[string]struct{}),
 		}
 
 		p4 := &peer{
-			Alias: 4,
-			conn:  &pion.PeerConnection{},
-			Topics: map[string]struct{}{
-				"topic1": struct{}{},
-			},
+			alias:  4,
+			conn:   &pion.PeerConnection{},
+			topics: map[string]struct{}{"topic1": {}},
 		}
 
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("isClosed", p2.conn).Return(false).Once().
 			On("isClosed", p4.conn).Return(true).Once()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
 		defer closeState(state)
 
@@ -1363,34 +1355,34 @@ func TestProcessTopicMessage(t *testing.T) {
 
 		ProcessMessagesQueue(state)
 
-		p2ReliableDC.AssertExpectations(t)
+		p2ReliableRWC.AssertExpectations(t)
 		webRtc.AssertExpectations(t)
 	})
 
 	t.Run("success multiple messages", func(t *testing.T) {
 		p1 := &peer{
-			Alias: 1,
+			alias: 1,
 			conn:  &pion.PeerConnection{},
-			Topics: map[string]struct{}{
-				"topic1": struct{}{},
+			topics: map[string]struct{}{
+				"topic1": {},
 			},
 		}
 
-		p2ReliableDC := &mockReadWriteCloser{}
-		p2ReliableDC.On("Write", mock.Anything).Return(0, nil).Twice()
+		p2ReliableRWC := &mockReadWriteCloser{}
+		p2ReliableRWC.On("Write", mock.Anything).Return(0, nil).Twice()
 		p2 := &peer{
-			Alias:      2,
-			ReliableDC: p2ReliableDC,
-			conn:       &pion.PeerConnection{},
-			Topics: map[string]struct{}{
-				"topic1": struct{}{},
+			alias:       2,
+			reliableRWC: p2ReliableRWC,
+			conn:        &pion.PeerConnection{},
+			topics: map[string]struct{}{
+				"topic1": {},
 			},
 		}
 
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("isClosed", p2.conn).Return(false).Twice()
-		config := makeTestConfigWithWebRtc(t, nil, webRtc)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
 		defer closeState(state)
 
@@ -1417,7 +1409,7 @@ func TestProcessTopicMessage(t *testing.T) {
 
 		ProcessMessagesQueue(state)
 
-		p2ReliableDC.AssertExpectations(t)
+		p2ReliableRWC.AssertExpectations(t)
 		webRtc.AssertExpectations(t)
 	})
 }
@@ -1438,32 +1430,32 @@ func BenchmarkProcessSubscriptionChange(b *testing.B) {
 	empty := []byte("")
 
 	changes := []topicChange{
-		topicChange{
+		{
 			peer:      s1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: topics1,
 		},
-		topicChange{
+		{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: topics1,
 		},
-		topicChange{
+		{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: topics2,
 		},
-		topicChange{
+		{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: topics3,
 		},
-		topicChange{
+		{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: empty,
 		},
-		topicChange{
+		{
 			peer:      s1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: empty,
@@ -1472,7 +1464,7 @@ func BenchmarkProcessSubscriptionChange(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		for _, c := range changes {
-			processSubscriptionChange(state, c)
+			require.NoError(b, processSubscriptionChange(state, c))
 		}
 	}
 }

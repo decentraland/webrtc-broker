@@ -67,10 +67,12 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 	log := c.log
 	marshaller := state.services.Marshaller
 	c.conn.SetReadLimit(maxCoordinatorMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		log.WithError(err).Error("Cannot set read deadline")
+		return
+	}
 	c.conn.SetPongHandler(func(s string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	header := &protocol.CoordinatorMessage{}
@@ -123,23 +125,32 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 	}
 }
 
-func (c *coordinator) writePump(state *State) {
+func (c *coordinator) writePump(_ *State) {
+	log := c.log
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			log.WithError(err).Debug("error closing connection on writePump exit")
+		}
 	}()
 
-	log := c.log
 	for {
 		select {
 		case bytes, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				log.WithError(err).Error("error setting write deadline")
+				return
+			}
+
 			if !ok {
-				c.conn.WriteCloseMessage()
+				if err := c.conn.WriteCloseMessage(); err != nil {
+					log.WithError(err).Debug("error sending write close message")
+				}
 				log.Info("channel closed")
 				return
 			}
+
 			if err := c.conn.WriteMessage(bytes); err != nil {
 				log.WithError(err).Error("error writing message")
 				return
@@ -154,7 +165,11 @@ func (c *coordinator) writePump(state *State) {
 				}
 			}
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				log.WithError(err).Error("error setting write deadline")
+				return
+			}
+
 			if err := c.conn.WritePingMessage(); err != nil {
 				log.WithError(err).Error("error writing ping message")
 				return
@@ -165,7 +180,9 @@ func (c *coordinator) writePump(state *State) {
 
 func (c *coordinator) Close() {
 	if c.conn != nil {
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			c.log.WithError(err).Debug("error closing coordinator")
+		}
 	}
 	close(c.send)
 

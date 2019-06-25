@@ -14,7 +14,7 @@ type ServerAuthenticator interface {
 	GenerateServerConnectURL(coordinatorURL string) (string, error)
 }
 
-// CoordinatorAuthenticator is the coordiantor authentication mechanism
+// CoordinatorAuthenticator is the coordinator authentication mechanism
 type CoordinatorAuthenticator interface {
 	AuthenticateFromURL(role protocol.Role, r *http.Request) (bool, error)
 }

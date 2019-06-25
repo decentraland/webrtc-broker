@@ -86,12 +86,12 @@ type testReporter struct {
 	Data        chan commServerSnapshot
 }
 
-func (r *testReporter) Report(stats *commserver.Stats) {
+func (r *testReporter) Report(stats commserver.Stats) {
 	select {
 	case <-r.RequestData:
 		snapshot := commServerSnapshot{
 			Alias:     stats.Alias,
-			PeerCount: stats.PeerCount,
+			PeerCount: len(stats.Peers),
 		}
 		r.Data <- snapshot
 	default:
@@ -118,7 +118,7 @@ func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 		Log:            logger,
 		CoordinatorURL: discoveryURL,
 		ReportPeriod:   1 * time.Second,
-		Reporter:       func(stats *commserver.Stats) { reporter.Report(stats) },
+		Reporter:       func(stats commserver.Stats) { reporter.Report(stats) },
 	}
 
 	ws, err := commserver.MakeState(&config)

@@ -1,6 +1,7 @@
 package commserver
 
 import (
+	"io"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -14,11 +15,20 @@ type PeerConnection = pion.PeerConnection
 // DataChannel is the top level pion's data channel
 type DataChannel = pion.DataChannel
 
+// DataChannelState is the pion's data channel state
+type DataChannelState = pion.DataChannelState
+
 // ReadWriteCloser is the detached datachannel pion's interface for read/write
 type ReadWriteCloser = datachannel.ReadWriteCloser
 
 // ICEServer represents a ICEServer config
 type ICEServer = pion.ICEServer
+
+// ICEConnectionState is the pion's ICEConnectionState
+type ICEConnectionState = pion.ICEConnectionState
+
+// ICECandidateType is the pion's ICECandidateType
+type ICECandidateType = pion.ICECandidateType
 
 // IWebRtc is this module interface
 type IWebRtc interface {
@@ -33,7 +43,8 @@ type IWebRtc interface {
 	onIceCandidate(conn *PeerConnection, sdp string) error
 	isClosed(conn *PeerConnection) bool
 	isNew(conn *PeerConnection) bool
-	close(conn *PeerConnection) error
+	close(conn io.Closer) error
+	getStats(conn *PeerConnection) pion.StatsReport
 }
 
 // WebRtc is our inmplemenation of IWebRtc
@@ -69,10 +80,11 @@ func (w *webRTC) isClosed(conn *PeerConnection) bool {
 }
 
 func (w *webRTC) isNew(conn *PeerConnection) bool {
-	return conn.ICEConnectionState() == pion.ICEConnectionStateNew || conn.ICEConnectionState() == pion.ICEConnectionStateChecking
+	return conn.ICEConnectionState() == pion.ICEConnectionStateNew ||
+		conn.ICEConnectionState() == pion.ICEConnectionStateChecking
 }
 
-func (w *webRTC) close(conn *PeerConnection) error {
+func (w *webRTC) close(conn io.Closer) error {
 	return conn.Close()
 }
 
@@ -155,4 +167,8 @@ func (w *webRTC) onIceCandidate(conn *PeerConnection, sdp string) error {
 	}
 
 	return nil
+}
+
+func (w *webRTC) getStats(conn *PeerConnection) pion.StatsReport {
+	return conn.GetStats()
 }

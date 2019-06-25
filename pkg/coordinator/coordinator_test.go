@@ -37,7 +37,7 @@ func makeDefaultServerSelector() *DefaultServerSelector {
 	return &DefaultServerSelector{ServerAliases: make(map[uint64]bool)}
 }
 
-func makeTestState(t *testing.T) *State {
+func makeTestState() *State {
 	config := Config{
 		ServerSelector: makeDefaultServerSelector(),
 		Log:            logrus.New(),
@@ -103,11 +103,11 @@ func TestUpgradeRequest(t *testing.T) {
 
 func TestReadPump(t *testing.T) {
 	t.Run("webrtc message", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeCommServer(conn)
+		p := makeCommServer(state, conn)
 		p.Alias = 1
 
 		msg := &protocol.WebRtcMessage{
@@ -144,11 +144,11 @@ func TestReadPump(t *testing.T) {
 	})
 
 	t.Run("connect message (with alias)", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeCommServer(conn)
+		p := makeCommServer(state, conn)
 		p.Alias = 1
 
 		msg := &protocol.ConnectMessage{
@@ -185,7 +185,7 @@ func TestWritePump(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("success", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
@@ -193,7 +193,7 @@ func TestWritePump(t *testing.T) {
 			On("WriteMessage", msg).Return(nil).Once().
 			On("WriteMessage", msg).Return(errors.New("stop")).Once().
 			On("SetWriteDeadline", mock.Anything).Return(nil).Once()
-		p := makeClient(conn)
+		p := makeClient(state, conn)
 		p.Alias = 1
 
 		p.sendCh <- msg
@@ -204,7 +204,7 @@ func TestWritePump(t *testing.T) {
 	})
 
 	t.Run("first write error", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
@@ -212,7 +212,7 @@ func TestWritePump(t *testing.T) {
 			On("WriteMessage", msg).Return(errors.New("error")).Once().
 			On("SetWriteDeadline", mock.Anything).Return(nil).Once()
 
-		p := makeClient(conn)
+		p := makeClient(state, conn)
 		p.Alias = 1
 
 		p.sendCh <- msg
@@ -224,7 +224,7 @@ func TestWritePump(t *testing.T) {
 }
 
 func TestConnectCommServer(t *testing.T) {
-	state := makeTestState(t)
+	state := makeTestState()
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
@@ -246,7 +246,7 @@ func TestConnectCommServer(t *testing.T) {
 }
 
 func TestConnectClient(t *testing.T) {
-	state := makeTestState(t)
+	state := makeTestState()
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
@@ -268,16 +268,16 @@ func TestConnectClient(t *testing.T) {
 }
 
 func TestRegisterCommServer(t *testing.T) {
-	state := makeTestState(t)
+	state := makeTestState()
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
 	conn.On("Close").Return(nil).Once()
-	s := makeCommServer(conn)
+	s := makeCommServer(state, conn)
 
 	conn2 := &MockWebsocket{}
 	conn2.On("Close").Return(nil).Once()
-	s2 := makeCommServer(conn2)
+	s2 := makeCommServer(state, conn2)
 
 	state.registerCommServer <- s
 	state.registerCommServer <- s2
@@ -305,16 +305,16 @@ func TestRegisterCommServer(t *testing.T) {
 }
 
 func TestRegisterClient(t *testing.T) {
-	state := makeTestState(t)
+	state := makeTestState()
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
 	conn.On("Close").Return(nil).Once()
-	c := makeClient(conn)
+	c := makeClient(state, conn)
 
 	conn2 := &MockWebsocket{}
 	conn2.On("Close").Return(nil).Once()
-	c2 := makeClient(conn2)
+	c2 := makeClient(state, conn2)
 
 	state.registerClient <- c
 	state.registerClient <- c2
@@ -353,13 +353,13 @@ func TestUnregister(t *testing.T) {
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
-	s := makeCommServer(conn)
+	s := makeCommServer(state, conn)
 	s.Alias = 1
 	state.Peers[s.Alias] = s
 	selector.ServerAliases[s.Alias] = true
 
 	conn2 := &MockWebsocket{}
-	s2 := makeCommServer(conn2)
+	s2 := makeCommServer(state, conn2)
 	s2.Alias = 2
 	state.Peers[s2.Alias] = s2
 	selector.ServerAliases[s2.Alias] = true
@@ -378,15 +378,15 @@ func TestSignaling(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("success", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(conn)
+		p := makeClient(state, conn)
 		p.Alias = 1
 
 		conn2 := &MockWebsocket{}
-		p2 := makeClient(conn2)
+		p2 := makeClient(state, conn2)
 		p2.Alias = 2
 
 		state.Peers[p.Alias] = p
@@ -415,12 +415,12 @@ func TestSignaling(t *testing.T) {
 	})
 
 	t.Run("on peer not found", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		state.signalingQueue = make(chan *inMessage)
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(conn)
+		p := makeClient(state, conn)
 		p.Alias = 1
 
 		state.Peers[p.Alias] = p
@@ -438,17 +438,17 @@ func TestSignaling(t *testing.T) {
 	})
 
 	t.Run("on channel closed", func(t *testing.T) {
-		state := makeTestState(t)
+		state := makeTestState()
 		state.signalingQueue = make(chan *inMessage)
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(conn)
+		p := makeClient(state, conn)
 		p.Alias = 1
 
 		conn2 := &MockWebsocket{}
 		conn2.On("Close").Return(nil).Once()
-		p2 := makeClient(conn2)
+		p2 := makeClient(state, conn2)
 		p2.Alias = 2
 		p2.close()
 

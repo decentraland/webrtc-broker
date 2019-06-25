@@ -6,7 +6,7 @@ import (
 	"io/ioutil"
 )
 
-// ZipCompression is the zip compression interace
+// ZipCompression is the zip compression interface
 type ZipCompression interface {
 	Zip(plain []byte) ([]byte, error)
 	Unzip(zipped []byte) ([]byte, error)

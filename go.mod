@@ -4,9 +4,9 @@ require (
 	github.com/golang/protobuf v1.3.0
 	github.com/gorilla/websocket v1.4.0
 	github.com/kr/pretty v0.1.0 // indirect
-	github.com/pion/datachannel v1.4.3
+	github.com/pion/datachannel v1.4.4
 	github.com/pion/logging v0.2.1
-	github.com/pion/webrtc/v2 v2.0.23-0.20190614114507-3d7235b4edd6
+	github.com/pion/webrtc/v2 v2.0.24-0.20190701173556-3eadbc2ff8f2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
 	golang.org/x/sync v0.0.0-20181221193216-37e7f081c4d4 // indirect

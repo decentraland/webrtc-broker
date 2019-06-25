@@ -80,9 +80,12 @@ func IsUnexpectedCloseError(err error) bool {
 
 // Dial open a websocket connection to the given url
 func Dial(url string) (IWebsocket, error) {
-	conn, _, err := _websocket.DefaultDialer.Dial(url, nil)
-
+	conn, resp, err := _websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
+		return &websocket{}, err
+	}
+
+	if err := resp.Body.Close(); err != nil {
 		return &websocket{}, err
 	}
 

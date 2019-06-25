@@ -14,7 +14,7 @@ compile-protocol:
 	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./broker.proto
 
 test: build
-	go test -race $(TEST_FLAGS) \
+	go test -count=1 -race $(TEST_FLAGS) \
 github.com/decentraland/webrtc-broker/pkg/commserver \
 github.com/decentraland/webrtc-broker/pkg/coordinator
 
@@ -31,7 +31,7 @@ check-cover: cover
 	go tool cover -html=coverage.out
 
 fmt:
-	gofmt -w .
+	gofmt -w -s .
 	goimports -w .
 
 version:
@@ -45,5 +45,11 @@ todo:
 
 lint:
 	golint ./...
+
+lintci:
+	golangci-lint run ./...
+
+validateci:
+	circleci config validate
 
 .PHONY: build test integration cover

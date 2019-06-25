@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	reportPeriod   = 30 * time.Second
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = 30 * time.Second
-	maxMessageSize = 5000 // NOTE let's adjust this later
+	defaultReportPeriod = 30 * time.Second
+	writeWait           = 10 * time.Second
+	pongWait            = 60 * time.Second
+	pingPeriod          = 30 * time.Second
+	maxMessageSize      = 5000 // NOTE let's adjust this later
 )
 
 // Stats expose coordinator stats for reporting purposes
@@ -81,6 +81,7 @@ type Peer struct {
 	sendCh   chan []byte
 	isClosed bool
 	isServer bool
+	log      *logging.Logger
 }
 
 // State represent the state of the coordinator
@@ -90,7 +91,7 @@ type State struct {
 	auth           authentication.CoordinatorAuthenticator
 	marshaller     protocol.IMarshaller
 	log            *logging.Logger
-	reporter       func(stats *Stats)
+	reporter       func(stats Stats)
 	reportPeriod   time.Duration
 
 	LastPeerAlias uint64
@@ -109,7 +110,7 @@ type Config struct {
 	Log            *logging.Logger
 	ServerSelector IServerSelector
 	Auth           authentication.CoordinatorAuthenticator
-	Reporter       func(stats *Stats)
+	Reporter       func(stats Stats)
 	ReportPeriod   time.Duration
 }
 
@@ -124,7 +125,7 @@ func MakeState(config *Config) *State {
 
 	reportPeriod := config.ReportPeriod
 	if reportPeriod.Seconds() == 0 {
-		reportPeriod = 30 * time.Second
+		reportPeriod = defaultReportPeriod
 	}
 
 	return &State{
@@ -144,16 +145,17 @@ func MakeState(config *Config) *State {
 	}
 }
 
-func makePeer(conn ws.IWebsocket, isServer bool) *Peer {
+func makePeer(state *State, conn ws.IWebsocket, isServer bool) *Peer {
 	return &Peer{
 		conn:     conn,
 		sendCh:   make(chan []byte, 256),
 		isServer: isServer,
+		log:      state.log,
 	}
 }
 
-func makeClient(conn ws.IWebsocket) *Peer     { return makePeer(conn, false) }
-func makeCommServer(conn ws.IWebsocket) *Peer { return makePeer(conn, true) }
+func makeClient(state *State, conn ws.IWebsocket) *Peer     { return makePeer(state, conn, false) }
+func makeCommServer(state *State, conn ws.IWebsocket) *Peer { return makePeer(state, conn, true) }
 
 func (p *Peer) send(state *State, msg protocol.Message) error {
 	log := state.log
@@ -178,9 +180,14 @@ func (p *Peer) writePump(state *State) {
 	for {
 		select {
 		case bytes, ok := <-p.sendCh:
-			p.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				log.WithError(err).Error("error setting write deadline")
+			}
+
 			if !ok {
-				p.conn.WriteCloseMessage()
+				if err := p.conn.WriteCloseMessage(); err != nil {
+					log.WithError(err).Debug("error writing close message")
+				}
 				return
 			}
 			if err := p.conn.WriteMessage(bytes); err != nil {
@@ -197,7 +204,10 @@ func (p *Peer) writePump(state *State) {
 				}
 			}
 		case <-ticker.C:
-			p.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				log.WithError(err).Error("error setting write deadline")
+				return
+			}
 			if err := p.conn.WritePingMessage(); err != nil {
 				log.WithError(err).Error("error writing ping message")
 				return
@@ -208,7 +218,9 @@ func (p *Peer) writePump(state *State) {
 
 func (p *Peer) close() {
 	if !p.isClosed {
-		p.conn.Close()
+		if err := p.conn.Close(); err != nil {
+			p.log.WithError(err).Debug("error closing peer")
+		}
 		close(p.sendCh)
 		p.isClosed = true
 	}
@@ -222,10 +234,13 @@ func readPump(state *State, p *Peer) {
 	log := state.log
 	marshaller := state.marshaller
 	p.conn.SetReadLimit(maxMessageSize)
-	p.conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := p.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		log.WithError(err).Error("error setting read deadline")
+		return
+	}
 	p.conn.SetPongHandler(func(s string) error {
-		p.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		err := p.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return err
 	})
 
 	header := &protocol.CoordinatorMessage{}
@@ -243,7 +258,7 @@ func readPump(state *State, p *Peer) {
 			break
 		}
 
-		if err := marshaller.Unmarshal(bytes, header); err != nil {
+		if err = marshaller.Unmarshal(bytes, header); err != nil {
 			log.WithError(err).Debug("decode header failure")
 			continue
 		}
@@ -316,7 +331,7 @@ func closeState(state *State) {
 func ConnectCommServer(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info("socket connect (server)")
-	p := makeCommServer(conn)
+	p := makeCommServer(state, conn)
 	state.registerCommServer <- p
 	go readPump(state, p)
 	go p.writePump(state)
@@ -326,7 +341,7 @@ func ConnectCommServer(state *State, conn ws.IWebsocket) {
 func ConnectClient(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info("socket connect (client)")
-	p := makeClient(conn)
+	p := makeClient(state, conn)
 	state.registerClient <- p
 	go readPump(state, p)
 	go p.writePump(state)
@@ -335,23 +350,30 @@ func ConnectClient(state *State, conn ws.IWebsocket) {
 // Start starts the coordinator
 func Start(state *State) {
 	log := state.log
-	ticker := time.NewTicker(reportPeriod)
+	ticker := time.NewTicker(state.reportPeriod)
 	defer ticker.Stop()
+
+	ignoreError := func(err error) {
+		if err != nil {
+			log.WithError(err).Debug("ignoring error")
+		}
+	}
+
 	for {
 		select {
 		case s := <-state.registerCommServer:
-			registerCommServer(state, s)
+			ignoreError(registerCommServer(state, s))
 			n := len(state.registerCommServer)
 			for i := 0; i < n; i++ {
 				s = <-state.registerCommServer
-				registerCommServer(state, s)
+				ignoreError(registerCommServer(state, s))
 			}
 		case c := <-state.registerClient:
-			registerClient(state, c)
+			ignoreError(registerClient(state, c))
 			n := len(state.registerClient)
 			for i := 0; i < n; i++ {
 				c = <-state.registerClient
-				registerClient(state, c)
+				ignoreError(registerClient(state, c))
 			}
 		case c := <-state.unregister:
 			unregister(state, c)
@@ -376,9 +398,8 @@ func Start(state *State) {
 					ServerCount: serverCount,
 					ClientCount: clientCount,
 				}
-				state.reporter(&stats)
+				state.reporter(stats)
 			}
-
 		case <-state.stop:
 			log.Debug("stop signal")
 			return
@@ -438,7 +459,7 @@ func registerCommServer(state *State, p *Peer) error {
 	return p.send(state, msg)
 }
 
-func registerClient(state *State, p *Peer) {
+func registerClient(state *State, p *Peer) error {
 	state.LastPeerAlias++
 	alias := state.LastPeerAlias
 	p.Alias = alias
@@ -452,7 +473,12 @@ func registerClient(state *State, p *Peer) {
 		Alias:            alias,
 		AvailableServers: servers,
 	}
-	p.send(state, msg)
+
+	if err := p.send(state, msg); err != nil {
+		p.close()
+		return err
+	}
+	return nil
 }
 
 func unregister(state *State, p *Peer) {
@@ -472,7 +498,12 @@ func signal(state *State, inMsg *inMessage) {
 	}
 }
 
-func repackageWebRtcMessage(state *State, from *Peer, bytes []byte, webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
+func repackageWebRtcMessage(
+	state *State,
+	from *Peer,
+	bytes []byte,
+	webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
+
 	log := state.log
 	marshaller := state.marshaller
 	if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {

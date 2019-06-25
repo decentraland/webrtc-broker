@@ -117,16 +117,16 @@ func main() {
 				log.Fatal("encode failed", err)
 			}
 
-			client.SendTopicSubscriptionMessage(map[string]bool{"test": true})
+			err = client.SendTopicSubscriptionMessage(map[string]bool{"test": true})
+			if err != nil {
+				log.Fatal("send topic subscription message", err)
+			}
 
 			writeTicker := time.NewTicker(100 * time.Millisecond)
 			defer writeTicker.Stop()
 
-			for {
-				select {
-				case <-writeTicker.C:
-					client.SendUnreliable <- bytes
-				}
+			for range writeTicker.C {
+				client.SendUnreliable <- bytes
 			}
 		}()
 	}

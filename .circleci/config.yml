@@ -1,11 +1,20 @@
-version: 2
+version: 2.1
+
+orbs:
+  tools: gotest/tools@0.0.9
+
 jobs:
   build:
     docker:
       - image: circleci/golang:1.12
-
     working_directory: ~/repo
-
     steps:
       - checkout
       - run: make test
+      - run: make integration
+
+workflows:
+  build_and_test:
+    jobs:
+      - build
+      - tools/lint
