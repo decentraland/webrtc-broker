@@ -638,6 +638,7 @@ func processUnregister(state *State, p *peer) error {
 	state.peers[p.index] = last
 	last.index = p.index
 	state.peers = state.peers[:size-1]
+	p.index = -1
 
 	if p.role == protocol.Role_COMMUNICATION_SERVER {
 		state.subscriptionsLock.Lock()
@@ -661,7 +662,6 @@ func processUnregister(state *State, p *peer) error {
 		}
 	}
 
-	p.index = -1
 	return nil
 }
 

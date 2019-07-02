@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"runtime/debug"
+
 	pionlogging "github.com/pion/logging"
 	"github.com/sirupsen/logrus"
 )
@@ -19,6 +21,7 @@ func LogPanic() {
 	if r := recover(); r != nil {
 		err, ok := r.(error)
 		if ok {
+			debug.PrintStack()
 			logrus.WithError(err).Error("panic")
 		}
 	}

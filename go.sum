@@ -77,6 +77,8 @@ github.com/pion/webrtc/v2 v2.0.24-0.20190701112953-aadb41c33d9e h1:QcRAa4DL6gOAz
 github.com/pion/webrtc/v2 v2.0.24-0.20190701112953-aadb41c33d9e/go.mod h1:zqAOIFy16a6XERjhowllQsY6NjKlMXKq073TynQI5vY=
 github.com/pion/webrtc/v2 v2.0.24-0.20190701173556-3eadbc2ff8f2 h1:I6f/X21Ifannxpb8LER5nf+Z7Qao/mRf0YYIi7GFMg4=
 github.com/pion/webrtc/v2 v2.0.24-0.20190701173556-3eadbc2ff8f2/go.mod h1:zqAOIFy16a6XERjhowllQsY6NjKlMXKq073TynQI5vY=
+github.com/pion/webrtc/v2 v2.0.24-0.20190702185104-2d465ebeee01 h1:4Sbb3aQfiJygeh/Yi7YUyUTF4mW98Z/zZK0k6p2DUyo=
+github.com/pion/webrtc/v2 v2.0.24-0.20190702185104-2d465ebeee01/go.mod h1:zqAOIFy16a6XERjhowllQsY6NjKlMXKq073TynQI5vY=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
