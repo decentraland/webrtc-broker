@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	"github.com/decentraland/webrtc-broker/pkg/commserver"
@@ -32,7 +30,7 @@ type Config struct {
 	Auth              authentication.ClientAuthenticator
 	OnMessageReceived func(reliable bool, msgType protocol.MessageType, raw []byte)
 	CoordinatorURL    string
-	Log               *logrus.Logger
+	Log               logging.Logger
 }
 
 // Client represents a peer with role CLIENT
@@ -52,14 +50,14 @@ type Client struct {
 	authMessage           chan []byte
 	coordinatorWriteQueue chan []byte
 
-	log *logrus.Logger
+	log logging.Logger
 }
 
 // MakeClient creates a new client
 func MakeClient(config *Config) *Client {
 	url, err := config.Auth.GenerateClientConnectURL(config.CoordinatorURL)
 	if err != nil {
-		config.Log.Fatal(err)
+		config.Log.Fatal().Err(err)
 	}
 
 	c := &Client{
@@ -138,22 +136,22 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	msg := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT, ToAlias: serverAlias}
 	bytes, err := proto.Marshal(msg)
 	if err != nil {
-		client.log.WithError(err).Fatal("cannot marshall connect message")
+		client.log.Fatal().Err(err).Msg("cannot marshall connect message")
 	}
 	client.coordinatorWriteQueue <- bytes
 
 	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
 		if candidate == nil {
-			client.log.WithField("peer", alias).Debug("finish collecting candidates")
+			client.log.Debug().Uint64("peer", alias).Msg("finish collecting candidates")
 			return
 		}
 
-		client.log.WithField("peer", alias).Debug("ice candidate found")
+		client.log.Debug().Uint64("peer", alias).Msg("ice candidate found")
 
 		iceCandidateInit := candidate.ToJSON()
 		serializedCandidate, err := json.Marshal(iceCandidateInit)
 		if err != nil {
-			client.log.WithField("peer", alias).WithError(err).Error("cannot serialize candidate")
+			client.log.Error().Uint64("peer", alias).Msg("cannot serialize candidate")
 			return
 		}
 		msg := protocol.WebRtcMessage{
@@ -163,16 +161,16 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 		}
 		bytes, err := proto.Marshal(&msg)
 		if err != nil {
-			client.log.WithError(err).Fatal("cannot serialize ice candidate message")
+			client.log.Fatal().Err(err).Msg("cannot serialize ice candidate message")
 		}
 		client.coordinatorWriteQueue <- bytes
 	})
 
 	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
-		client.log.Info("ICE Connection State has changed: ", connectionState.String())
+		client.log.Info().Str("state", connectionState.String()).Msg("ICE Connection State has changed: ")
 		if connectionState == pion.ICEConnectionStateDisconnected {
 			if err := conn.Close(); err != nil {
-				client.log.WithError(err).Debug("error closing on disconnect")
+				client.log.Debug().Err(err).Msg("error closing on disconnect")
 			}
 		}
 	})
@@ -184,7 +182,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 			for {
 				n, _, err := c.ReadDataChannel(buffer)
 				if err != nil {
-					client.log.Debug("stop readPump, datachannel closed", reliable)
+					client.log.Debug().Bool("reliable", reliable).Msg("stop readPump, datachannel closed")
 					return
 				}
 
@@ -196,7 +194,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 				copy(bytes, buffer[:n])
 
 				if err := proto.Unmarshal(bytes, &header); err != nil {
-					client.log.WithError(err).Error("Failed to unmarshall message header")
+					client.log.Error().Err(err).Msg("Failed to unmarshall message header")
 					continue
 				}
 
@@ -215,7 +213,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 				bytes := <-client.authMessage
 				_, err := c.WriteDataChannel(bytes, false)
 				if err != nil {
-					client.log.WithError(err).Error("error writing auth message")
+					client.log.Error().Err(err).Msg("error writing auth message")
 					return
 				}
 			} else {
@@ -226,12 +224,12 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 				select {
 				case bytes, ok := <-messagesQueue:
 					if !ok {
-						client.log.Debug("close write pump, channel closed")
+						client.log.Debug().Msg("close write pump, channel closed")
 						return
 					}
 
 					if _, err := c.WriteDataChannel(bytes, false); err != nil {
-						client.log.WithError(err).Error("error writing")
+						client.log.Error().Err(err).Msg("error writing")
 						return
 					}
 
@@ -240,12 +238,12 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 						bytes = <-messagesQueue
 						_, err := c.WriteDataChannel(bytes, false)
 						if err != nil {
-							client.log.WithError(err).Error("error writing")
+							client.log.Error().Err(err).Msg("error writing")
 							return
 						}
 					}
 				case <-stopQueue:
-					client.log.Debug("close write pump, stopQueue")
+					client.log.Debug().Msg("close write pump, stopQueue")
 					return
 				}
 			}
@@ -254,15 +252,15 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 		d.OnOpen(func() {
 			dd, err := d.Detach()
 			if err != nil {
-				client.log.WithError(err).Fatal("cannot detach datachannel")
+				client.log.Fatal().Err(err).Msg("cannot detach datachannel")
 			}
 
 			reliable := d.Label() == "reliable"
 
 			if reliable {
-				client.log.Info("Data channel open (reliable)")
+				client.log.Info().Msg("Data channel open (reliable)")
 			} else {
-				client.log.Info("Data channel open (unreliable)")
+				client.log.Info().Msg("Data channel open (unreliable)")
 			}
 			go readPump(client, dd, reliable)
 			go writePump(client, dd, reliable)
@@ -278,25 +276,28 @@ func Start(config *Config) *Client {
 	client := MakeClient(config)
 
 	go func() {
-		client.log.Fatal(client.startCoordination())
+		err := client.startCoordination()
+		if err != nil {
+			client.log.Fatal().Err(err)
+		}
 	}()
 
 	pData := <-client.PeerData
 
-	client.log.Infof("my alias is %d", pData.Alias)
+	client.log.Info().Msgf("my alias is %d", pData.Alias)
 
 	if err := client.Connect(pData.Alias, pData.AvailableServers[0]); err != nil {
-		client.log.Fatal(err)
+		client.log.Fatal().Err(err)
 	}
 
 	authMessage, err := config.Auth.GenerateClientAuthMessage()
 	if err != nil {
-		client.log.Fatal(err)
+		client.log.Fatal().Err(err)
 	}
 
 	bytes, err := proto.Marshal(authMessage)
 	if err != nil {
-		client.log.Fatal(err)
+		client.log.Fatal().Err(err)
 	}
 
 	client.authMessage <- bytes
@@ -312,32 +313,35 @@ func (client *Client) startCoordination() error {
 
 	client.coordinator = c
 	defer func() {
-		client.log.Fatal(c.Close())
+		err := c.Close()
+		if err != nil {
+			client.log.Fatal().Err(err)
+		}
 	}()
 
 	go func() {
 		for bytes := range client.coordinatorWriteQueue {
 			if err := c.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				client.log.WithError(err).Fatal("set write deadline error")
+				client.log.Fatal().Err(err).Msg("set write deadline error")
 			}
 
 			if err := c.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-				client.log.WithError(err).Fatal("write coordinator message")
+				client.log.Fatal().Err(err).Msg("write coordinator message")
 			}
 		}
-		client.log.Debug("channel closed")
+		client.log.Debug().Msg("channel closed")
 	}()
 
 	header := protocol.CoordinatorMessage{}
 	for {
 		_, bytes, err := c.ReadMessage()
 		if err != nil {
-			client.log.WithError(err).Error("read message")
+			client.log.Error().Err(err).Msg("read message")
 			return err
 		}
 
 		if err := proto.Unmarshal(bytes, &header); err != nil {
-			client.log.WithError(err).Error("failed to unmarshall header")
+			client.log.Error().Err(err).Msg("failed to unmarshall header")
 			continue
 		}
 
@@ -347,11 +351,11 @@ func (client *Client) startCoordination() error {
 		case protocol.MessageType_WELCOME:
 			welcomeMessage := protocol.WelcomeMessage{}
 			if err := proto.Unmarshal(bytes, &welcomeMessage); err != nil {
-				client.log.WithError(err).Fatal("Failed to decode welcome message")
+				client.log.Fatal().Err(err).Msg("Failed to decode welcome message")
 			}
 
 			if len(welcomeMessage.AvailableServers) == 0 {
-				client.log.Fatal("no server available to connect")
+				client.log.Fatal().Msg("no server available to connect")
 			}
 
 			client.PeerData <- peerData{
@@ -361,33 +365,33 @@ func (client *Client) startCoordination() error {
 		case protocol.MessageType_WEBRTC_OFFER:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
-				client.log.WithError(err).Error("error unmarshalling webrtc message")
+				client.log.Error().Err(err).Msg("error unmarshalling webrtc message")
 				return err
 			}
 
-			client.log.Debugf("offer received from: %d", webRtcMessage.FromAlias)
+			client.log.Debug().Msgf("offer received from: %d", webRtcMessage.FromAlias)
 
 			offer := pion.SessionDescription{}
 			if err := json.Unmarshal(webRtcMessage.Data, &offer); err != nil {
-				client.log.WithError(err).Fatal("error unmarshalling webrtc message")
+				client.log.Fatal().Err(err).Msg("error unmarshalling webrtc message")
 			}
 
 			if err := client.conn.SetRemoteDescription(offer); err != nil {
-				client.log.Fatal("error setting remote description", err)
+				client.log.Fatal().Err(err).Msg("error setting remote description")
 			}
 
 			answer, err := client.conn.CreateAnswer(nil)
 			if err != nil {
-				client.log.Fatal("error creating webrtc answer", err)
+				client.log.Fatal().Err(err).Msg("error creating webrtc answer")
 			}
 
 			if err = client.conn.SetLocalDescription(answer); err != nil {
-				client.log.Fatal("error setting local description", err)
+				client.log.Fatal().Err(err).Msg("error setting local description")
 			}
 
 			serializedAnswer, err := json.Marshal(answer)
 			if err != nil {
-				client.log.WithError(err).Fatal("cannot serialize answer")
+				client.log.Fatal().Err(err).Msg("cannot serialize answer")
 			}
 
 			answerWebRtcMessage := &protocol.WebRtcMessage{
@@ -397,23 +401,23 @@ func (client *Client) startCoordination() error {
 			}
 			bytes, err := proto.Marshal(answerWebRtcMessage)
 			if err != nil {
-				client.log.Fatal("encode webrtc answer message failed", err)
+				client.log.Fatal().Err(err).Msg("encode webrtc answer message failed")
 			}
 
 			client.coordinatorWriteQueue <- bytes
 		case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
-				client.log.Error("error unmarshalling webrtc message")
+				client.log.Error().Err(err).Msg("error unmarshalling webrtc message")
 				return err
 			}
-			client.log.Debug("ice candidate received")
+			client.log.Debug().Msg("ice candidate received")
 			candidate := pion.ICECandidateInit{}
 			if err := json.Unmarshal(webRtcMessage.Data, &candidate); err != nil {
-				client.log.WithError(err).Fatal("error unmarshalling candidate")
+				client.log.Fatal().Err(err).Msg("error unmarshalling candidate")
 			}
 			if err := client.conn.AddICECandidate(candidate); err != nil {
-				client.log.WithError(err).Fatal("error adding remote ice candidate")
+				client.log.Fatal().Err(err).Msg("error adding remote ice candidate")
 			}
 		}
 	}

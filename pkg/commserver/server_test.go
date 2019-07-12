@@ -10,11 +10,11 @@ import (
 	pion "github.com/pion/webrtc/v2"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/decentraland/webrtc-broker/internal/logging"
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,19 +145,17 @@ func makeTestServices(webRtc *mockWebRtc) services {
 	s := services{
 		Marshaller: &protocol.Marshaller{},
 		WebRtc:     webRtc,
-		Log:        logrus.New(),
+		Log:        logging.New(),
 		Zipper:     &GzipCompression{},
 	}
 	return s
 }
 
 func makeTestConfigWithWebRtc(auth authentication.ServerAuthenticator, webRtc *mockWebRtc) *Config {
-	logger := logrus.New()
 	config := &Config{
 		Auth:                    auth,
 		EstablishSessionTimeout: 1 * time.Second,
 		WebRtc:                  webRtc,
-		Log:                     logger,
 	}
 
 	return config
@@ -201,7 +199,7 @@ func addPeer(state *State, p *peer) *peer {
 func TestCoordinatorSend(t *testing.T) {
 	config := makeTestConfig()
 	state := makeTestState(t, config)
-	c := coordinator{send: make(chan []byte, 256), log: logrus.New()}
+	c := coordinator{send: make(chan []byte, 256), log: logging.New()}
 	defer c.Close()
 
 	msg1 := &protocol.PingMessage{}

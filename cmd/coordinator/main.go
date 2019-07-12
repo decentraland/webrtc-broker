@@ -8,7 +8,6 @@ import (
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	"github.com/decentraland/webrtc-broker/pkg/coordinator"
-	"github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -16,14 +15,14 @@ func main() {
 	port := flag.Int("port", 9090, "")
 	flag.Parse()
 
-	log := logrus.New()
-	defer logging.LogPanic()
+	log := logging.New()
+	defer logging.LogPanic(log)
 
 	auth := authentication.NoopAuthenticator{}
 
 	config := coordinator.Config{
 		Auth: &auth,
-		Log:  log,
+		Log:  &log,
 	}
 	state := coordinator.MakeState(&config)
 
@@ -33,6 +32,6 @@ func main() {
 	coordinator.Register(state, mux)
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
-	log.Info("starting coordinator ", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Info().Msgf("starting coordinator at %s", addr)
+	log.Fatal().Err(http.ListenAndServe(addr, mux))
 }

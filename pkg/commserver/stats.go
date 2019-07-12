@@ -57,7 +57,7 @@ func report(state *State) {
 
 		candidateStats, ok := stats.(pion.ICECandidateStats)
 		if !ok {
-			log.Warnf("requested ice candidate type %s, but is not from type ICECandidateStats", statsID)
+			log.Warn().Msgf("requested ice candidate type %s, but is not from type ICECandidateStats", statsID)
 		}
 
 		return candidateStats, ok

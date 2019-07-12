@@ -7,8 +7,9 @@ build:
 	go build -o build/server ./cmd/server
 
 escape:
-	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/commserver
-	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/coordinator
+	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/coordinator 2> build/escape.out
+	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/commserver  2>> build/escape.out
+	cat build/escape.out | grep -v inlining | grep -v "does not escape" | grep -v "can inline"
 
 compile-protocol:
 	cd pkg/protocol; ${PROTOC} --js_out=import_style=commonjs,binary:. --ts_out=. --go_out=. ./broker.proto
