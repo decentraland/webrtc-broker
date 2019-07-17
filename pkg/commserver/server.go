@@ -514,7 +514,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 				return
 			}
 
-			isValid, err := s.Auth.AuthenticateFromMessage(authMessage.Role, authMessage.Body)
+			isValid, identity, err := s.Auth.AuthenticateFromMessage(authMessage.Role, authMessage.Body)
 			if err != nil {
 				p.logError(err).Error("authentication error")
 				p.Close()
@@ -523,6 +523,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 
 			if isValid {
 				p.role = authMessage.Role
+				p.identity = identity
 				p.log().Debug("peer authorized")
 				if p.role == protocol.Role_COMMUNICATION_SERVER {
 					state.subscriptionsLock.Lock()
@@ -540,8 +541,8 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 						p.Close()
 						return
 					}
-					topicSubscriptionMessage := &protocol.TopicSubscriptionMessage{
-						Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+					topicSubscriptionMessage := &protocol.SubscriptionMessage{
+						Type:   protocol.MessageType_SUBSCRIPTION,
 						Format: protocol.Format_GZIP,
 					}
 					topicSubscriptionMessage.Topics = zipped
@@ -876,8 +877,8 @@ func broadcastSubscriptionChange(state *State) error {
 		return err
 	}
 
-	message := &protocol.TopicSubscriptionMessage{
-		Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+	message := &protocol.SubscriptionMessage{
+		Type:   protocol.MessageType_SUBSCRIPTION,
 		Format: protocol.Format_GZIP,
 		Topics: encodedTopics,
 	}

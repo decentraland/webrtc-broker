@@ -125,6 +125,7 @@ func TestReadPump(t *testing.T) {
 			On("SetReadLimit", mock.Anything).Return(nil).Once().
 			On("SetReadDeadline", mock.Anything).Return(nil).Once().
 			On("SetPongHandler", mock.Anything).Once()
+
 		go readPump(state, p)
 
 		unregistered := <-state.unregister

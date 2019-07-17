@@ -50,22 +50,22 @@ func main() {
 			if *trackStats {
 				trackCh := make(chan []byte, 256)
 				config.OnMessageReceived = func(reliable bool, msgType protocol.MessageType, raw []byte) {
-					if !reliable && msgType == protocol.MessageType_DATA {
+					if !reliable && msgType == protocol.MessageType_TOPIC_FW {
 						trackCh <- raw
 					}
 				}
 
 				go func() {
 					peers := make(map[uint64]*simulation.Stats)
-					dataMessage := protocol.DataMessage{}
+					topicFWMessage := protocol.TopicFWMessage{}
 
 					onMessage := func(rawMsg []byte) {
-						if err := proto.Unmarshal(rawMsg, &dataMessage); err != nil {
+						if err := proto.Unmarshal(rawMsg, &topicFWMessage); err != nil {
 							log.Println("error unmarshalling data message")
 							return
 						}
 
-						alias := dataMessage.FromAlias
+						alias := topicFWMessage.FromAlias
 						stats := peers[alias]
 
 						if stats == nil {

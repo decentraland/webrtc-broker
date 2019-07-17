@@ -9,7 +9,7 @@ import (
 
 // ServerAuthenticator is the communication server authentication mechanism
 type ServerAuthenticator interface {
-	AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, error)
+	AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, []byte, error)
 	GenerateServerAuthMessage() (*protocol.AuthMessage, error)
 	GenerateServerConnectURL(coordinatorURL string) (string, error)
 }
@@ -29,8 +29,8 @@ type ClientAuthenticator interface {
 type NoopAuthenticator struct{}
 
 // AuthenticateFromMessage always return true
-func (a *NoopAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, error) {
-	return true, nil
+func (a *NoopAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, []byte, error) {
+	return true, nil, nil
 }
 
 // AuthenticateFromURL always return true

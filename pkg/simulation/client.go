@@ -99,8 +99,8 @@ func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error
 		return err
 	}
 
-	message := &protocol.TopicSubscriptionMessage{
-		Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+	message := &protocol.SubscriptionMessage{
+		Type:   protocol.MessageType_SUBSCRIPTION,
 		Format: protocol.Format_GZIP,
 		Topics: encodedTopics,
 	}

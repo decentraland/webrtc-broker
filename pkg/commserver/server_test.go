@@ -21,9 +21,9 @@ type MockWebsocket = _testing.MockWebsocket
 
 type mockServerAuthenticator struct{ mock.Mock }
 
-func (m *mockServerAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, error) {
+func (m *mockServerAuthenticator) AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, []byte, error) {
 	args := m.Called(role, bytes)
-	return args.Bool(0), args.Error(1)
+	return args.Bool(0), args.Get(1).([]byte), args.Error(2)
 }
 
 func (m *mockServerAuthenticator) GenerateServerAuthMessage() (*protocol.AuthMessage, error) {
@@ -537,7 +537,7 @@ func TestInitPeer(t *testing.T) {
 	t.Run("auth exchange: first message is not auth", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
-		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, []byte{}, nil)
 
 		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
@@ -625,7 +625,7 @@ func TestInitPeer(t *testing.T) {
 	t.Run("auth exchange: invalid credentials received", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
-		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(false, nil)
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(false, []byte{}, nil)
 		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
@@ -670,7 +670,7 @@ func TestInitPeer(t *testing.T) {
 	t.Run("auth exchange: valid credentials are received from a client", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
-		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, []byte{}, nil)
 		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
@@ -720,7 +720,7 @@ func TestInitPeer(t *testing.T) {
 	t.Run("auth exchange: valid credentials are received from a server", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		auth := &mockServerAuthenticator{}
-		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, nil)
+		auth.On("AuthenticateFromMessage", mock.Anything, mock.Anything).Return(true, []byte{}, nil)
 		config := makeTestConfigWithWebRtc(auth, webRtc)
 		test := setupAuthExchangeTest(authExchangeTestConfig{
 			t:      t,
@@ -839,8 +839,8 @@ func TestReadReliablePump(t *testing.T) {
 	}
 
 	t.Run("topic subscription message", func(t *testing.T) {
-		msg := &protocol.TopicSubscriptionMessage{
-			Type:   protocol.MessageType_TOPIC_SUBSCRIPTION,
+		msg := &protocol.SubscriptionMessage{
+			Type:   protocol.MessageType_SUBSCRIPTION,
 			Format: protocol.Format_PLAIN,
 			Topics: []byte("topic1 topic2"),
 		}
@@ -858,6 +858,7 @@ func TestReadReliablePump(t *testing.T) {
 		msg := &protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
 			Topic: "topic1",
+			Body:  []byte("body"),
 		}
 
 		p := setupPeer(t, 1, msg)
@@ -867,12 +868,24 @@ func TestReadReliablePump(t *testing.T) {
 		peerMessage := <-p.messagesQueue
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
+
+		topicFWMessage := protocol.TopicFWMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToClient, &topicFWMessage))
+		require.Equal(t, uint64(1), topicFWMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicFWMessage.Body)
+
+		topicMessage := protocol.TopicMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToServer, &topicMessage))
+		require.Equal(t, uint64(1), topicMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicMessage.Body)
 	})
 
 	t.Run("topic message (server)", func(t *testing.T) {
 		msg := &protocol.TopicMessage{
-			Type:  protocol.MessageType_TOPIC,
-			Topic: "topic1",
+			Type:      protocol.MessageType_TOPIC,
+			Topic:     "topic1",
+			FromAlias: uint64(3),
+			Body:      []byte("body"),
 		}
 
 		p := setupPeer(t, 1, msg)
@@ -883,6 +896,68 @@ func TestReadReliablePump(t *testing.T) {
 		peerMessage := <-p.messagesQueue
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
+
+		topicFWMessage := protocol.TopicFWMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToClient, &topicFWMessage))
+		require.Equal(t, uint64(3), topicFWMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicFWMessage.Body)
+
+		require.Empty(t, peerMessage.rawMsgToServer)
+	})
+
+	t.Run("topic identity message (client)", func(t *testing.T) {
+		msg := &protocol.TopicIdentityMessage{
+			Type:  protocol.MessageType_TOPIC_IDENTITY,
+			Topic: "topic1",
+			Body:  []byte("body"),
+		}
+
+		p := setupPeer(t, 1, msg)
+		p.readReliablePump()
+
+		require.Len(t, p.messagesQueue, 1)
+		peerMessage := <-p.messagesQueue
+		require.Equal(t, peerMessage.from, p)
+		require.Equal(t, "topic1", peerMessage.topic)
+
+		topicFWMessage := protocol.TopicIdentityFWMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToClient, &topicFWMessage))
+		require.Equal(t, uint64(1), topicFWMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicFWMessage.Body)
+		require.Equal(t, protocol.Role_CLIENT, topicFWMessage.Role)
+
+		topicMessage := protocol.TopicIdentityMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToServer, &topicMessage))
+		require.Equal(t, uint64(1), topicMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicMessage.Body)
+		require.Equal(t, protocol.Role_CLIENT, topicMessage.Role)
+	})
+
+	t.Run("topic identity message (server)", func(t *testing.T) {
+		msg := &protocol.TopicIdentityMessage{
+			Type:      protocol.MessageType_TOPIC_IDENTITY,
+			Topic:     "topic1",
+			Body:      []byte("body"),
+			Role:      protocol.Role_CLIENT,
+			FromAlias: uint64(3),
+		}
+
+		p := setupPeer(t, 1, msg)
+		p.role = protocol.Role_COMMUNICATION_SERVER
+		p.readReliablePump()
+
+		require.Len(t, p.messagesQueue, 1)
+		peerMessage := <-p.messagesQueue
+		require.Equal(t, peerMessage.from, p)
+		require.Equal(t, "topic1", peerMessage.topic)
+
+		topicFWMessage := protocol.TopicIdentityFWMessage{}
+		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToClient, &topicFWMessage))
+		require.Equal(t, uint64(3), topicFWMessage.FromAlias)
+		require.Equal(t, []byte("body"), topicFWMessage.Body)
+		require.Equal(t, protocol.Role_CLIENT, topicFWMessage.Role)
+
+		require.Empty(t, peerMessage.rawMsgToServer)
 	})
 }
 
@@ -926,6 +1001,24 @@ func TestReadUnreliablePump(t *testing.T) {
 	t.Run("topic message", func(t *testing.T) {
 		msg := &protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
+			Topic: "topic1",
+		}
+
+		webRtc := makeDefaultMockWebRtc()
+
+		p := setup(t, 1, msg, webRtc)
+		p.readUnreliablePump()
+
+		require.Len(t, p.messagesQueue, 1)
+		peerMessage := <-p.messagesQueue
+		require.Equal(t, peerMessage.from, p)
+		require.Equal(t, "topic1", peerMessage.topic)
+		webRtc.AssertExpectations(t)
+	})
+
+	t.Run("topic identity message", func(t *testing.T) {
+		msg := &protocol.TopicIdentityMessage{
+			Type:  protocol.MessageType_TOPIC_IDENTITY,
 			Topic: "topic1",
 		}
 

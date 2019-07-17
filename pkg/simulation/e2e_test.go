@@ -148,7 +148,7 @@ func TestE2E(t *testing.T) {
 	_, server, discoveryURL, connectURL := startCoordinator(t)
 	defer server.Close()
 
-	dataMessage := protocol.DataMessage{}
+	topicFWMessage := protocol.TopicFWMessage{}
 
 	printTitle("starting comm servers")
 	comm1Reporter := startCommServer(t, discoveryURL)
@@ -270,16 +270,16 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c2ReceivedReliable, 1)
 
 	recvMsg := <-c1ReceivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c2 test"), dataMessage.Body)
-	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c2 test"), topicFWMessage.Body)
+	require.Equal(t, c2Data.Alias, topicFWMessage.FromAlias)
 
 	recvMsg = <-c2ReceivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c1 test"), dataMessage.Body)
-	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
+	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
 
 	printTitle("Each client sends a topic message, by unreliable channel")
 	c1.SendUnreliable <- c1EncodedMessage
@@ -290,16 +290,16 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c2ReceivedUnreliable, 1)
 
 	recvMsg = <-c1ReceivedUnreliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c2 test"), dataMessage.Body)
-	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c2 test"), topicFWMessage.Body)
+	require.Equal(t, c2Data.Alias, topicFWMessage.FromAlias)
 
 	recvMsg = <-c2ReceivedUnreliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c1 test"), dataMessage.Body)
-	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
+	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
 
 	printTitle("Remove topic")
 	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{}))
@@ -333,16 +333,16 @@ func TestE2E(t *testing.T) {
 	require.Len(t, c2ReceivedReliable, 1)
 
 	recvMsg = <-c1ReceivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c2 test"), dataMessage.Body)
-	require.Equal(t, c2Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c2 test"), topicFWMessage.Body)
+	require.Equal(t, c2Data.Alias, topicFWMessage.FromAlias)
 
 	recvMsg = <-c2ReceivedReliable
-	require.Equal(t, protocol.MessageType_DATA, recvMsg.msgType)
-	require.NoError(t, proto.Unmarshal(recvMsg.raw, &dataMessage))
-	require.Equal(t, []byte("c1 test"), dataMessage.Body)
-	require.Equal(t, c1Data.Alias, dataMessage.FromAlias)
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
+	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
 
 	log.Println("TEST END")
 }
