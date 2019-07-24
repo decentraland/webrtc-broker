@@ -228,8 +228,8 @@ func (p *Peer) close() {
 
 func readPump(state *State, p *Peer) {
 	defer func() {
-		state.unregister <- p
 		p.close()
+		state.unregister <- p
 	}()
 	log := state.log
 	marshaller := state.marshaller

@@ -215,6 +215,9 @@ func (p *peer) readPeerMessage(reliable bool, rawMsg []byte) {
 }
 
 func (p *peer) WriteReliable(rawMsg []byte) error {
+	if p.reliableRWC == nil {
+		return nil
+	}
 	if _, err := p.reliableRWC.Write(rawMsg); err != nil {
 		p.logError(err).Error("Error writing reliable channel")
 		p.Close()
@@ -224,6 +227,9 @@ func (p *peer) WriteReliable(rawMsg []byte) error {
 }
 
 func (p *peer) WriteUnreliable(rawMsg []byte) error {
+	if p.unreliableRWC == nil {
+		return nil
+	}
 	if _, err := p.unreliableRWC.Write(rawMsg); err != nil {
 		p.logError(err).Error("Error writing unreliable channel")
 		p.Close()
