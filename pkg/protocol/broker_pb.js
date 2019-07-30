@@ -631,7 +631,7 @@ proto.protocol.WebRtcMessage.toObject = function(includeInstance, msg) {
     type: jspb.Message.getFieldWithDefault(msg, 1, 0),
     fromAlias: jspb.Message.getFieldWithDefault(msg, 2, 0),
     toAlias: jspb.Message.getFieldWithDefault(msg, 3, 0),
-    sdp: jspb.Message.getFieldWithDefault(msg, 4, "")
+    data: msg.getData_asB64()
   };
 
   if (includeInstance) {
@@ -681,8 +681,8 @@ proto.protocol.WebRtcMessage.deserializeBinaryFromReader = function(msg, reader)
       msg.setToAlias(value);
       break;
     case 4:
-      var value = /** @type {string} */ (reader.readString());
-      msg.setSdp(value);
+      var value = /** @type {!Uint8Array} */ (reader.readBytes());
+      msg.setData(value);
       break;
     default:
       reader.skipField();
@@ -734,9 +734,9 @@ proto.protocol.WebRtcMessage.serializeBinaryToWriter = function(message, writer)
       f
     );
   }
-  f = message.getSdp();
+  f = message.getData_asU8();
   if (f.length > 0) {
-    writer.writeString(
+    writer.writeBytes(
       4,
       f
     );
@@ -790,17 +790,41 @@ proto.protocol.WebRtcMessage.prototype.setToAlias = function(value) {
 
 
 /**
- * optional string sdp = 4;
- * @return {string}
+ * optional bytes data = 4;
+ * @return {!(string|Uint8Array)}
  */
-proto.protocol.WebRtcMessage.prototype.getSdp = function() {
-  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+proto.protocol.WebRtcMessage.prototype.getData = function() {
+  return /** @type {!(string|Uint8Array)} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
 };
 
 
-/** @param {string} value */
-proto.protocol.WebRtcMessage.prototype.setSdp = function(value) {
-  jspb.Message.setProto3StringField(this, 4, value);
+/**
+ * optional bytes data = 4;
+ * This is a type-conversion wrapper around `getData()`
+ * @return {string}
+ */
+proto.protocol.WebRtcMessage.prototype.getData_asB64 = function() {
+  return /** @type {string} */ (jspb.Message.bytesAsB64(
+      this.getData()));
+};
+
+
+/**
+ * optional bytes data = 4;
+ * Note that Uint8Array is not supported on all browsers.
+ * @see http://caniuse.com/Uint8Array
+ * This is a type-conversion wrapper around `getData()`
+ * @return {!Uint8Array}
+ */
+proto.protocol.WebRtcMessage.prototype.getData_asU8 = function() {
+  return /** @type {!Uint8Array} */ (jspb.Message.bytesAsU8(
+      this.getData()));
+};
+
+
+/** @param {!(string|Uint8Array)} value */
+proto.protocol.WebRtcMessage.prototype.setData = function(value) {
+  jspb.Message.setProto3BytesField(this, 4, value);
 };
 
 

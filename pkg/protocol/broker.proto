@@ -54,7 +54,7 @@ message WebRtcMessage {
     MessageType type = 1;
     uint64 from_alias = 2;
     uint64 to_alias = 3;
-    string sdp = 4;
+    bytes data = 4;
 }
 
 // NOTE: comm server messsages

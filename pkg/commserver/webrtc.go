@@ -37,10 +37,10 @@ type IWebRtc interface {
 	createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error)
 	registerOpenHandler(*DataChannel, func())
 	detach(*DataChannel) (ReadWriteCloser, error)
-	createOffer(conn *PeerConnection) (string, error)
-	onAnswer(conn *PeerConnection, sdp string) error
-	onOffer(conn *PeerConnection, sdp string) (string, error)
-	onIceCandidate(conn *PeerConnection, sdp string) error
+	createOffer(conn *PeerConnection) (pion.SessionDescription, error)
+	onAnswer(conn *PeerConnection, answer pion.SessionDescription) error
+	onOffer(conn *PeerConnection, offer pion.SessionDescription) (pion.SessionDescription, error)
+	onIceCandidate(conn *PeerConnection, candidate pion.ICECandidateInit) error
 	isClosed(conn *PeerConnection) bool
 	isNew(conn *PeerConnection) bool
 	close(conn io.Closer) error
@@ -59,6 +59,7 @@ func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 	s.SetSrflxAcceptanceMinWait(0)
 	s.SetPrflxAcceptanceMinWait(0)
 	s.SetRelayAcceptanceMinWait(5 * time.Second)
+	s.SetTrickle(true)
 
 	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: peerAlias}
 	s.DetachDataChannels()
@@ -111,26 +112,21 @@ func (w *webRTC) detach(dc *DataChannel) (ReadWriteCloser, error) {
 	return dc.Detach()
 }
 
-func (w *webRTC) createOffer(conn *PeerConnection) (string, error) {
+func (w *webRTC) createOffer(conn *PeerConnection) (pion.SessionDescription, error) {
 	offer, err := conn.CreateOffer(nil)
 	if err != nil {
-		return "", err
+		return offer, err
 	}
 
 	err = conn.SetLocalDescription(offer)
 	if err != nil {
-		return "", err
+		return offer, err
 	}
 
-	return offer.SDP, nil
+	return offer, nil
 }
 
-func (w *webRTC) onAnswer(conn *PeerConnection, sdp string) error {
-	answer := pion.SessionDescription{
-		Type: pion.SDPTypeAnswer,
-		SDP:  sdp,
-	}
-
+func (w *webRTC) onAnswer(conn *PeerConnection, answer pion.SessionDescription) error {
 	if err := conn.SetRemoteDescription(answer); err != nil {
 		return err
 	}
@@ -138,31 +134,26 @@ func (w *webRTC) onAnswer(conn *PeerConnection, sdp string) error {
 	return nil
 }
 
-func (w *webRTC) onOffer(conn *PeerConnection, sdp string) (string, error) {
-	offer := pion.SessionDescription{
-		Type: pion.SDPTypeOffer,
-		SDP:  sdp,
-	}
-
+func (w *webRTC) onOffer(conn *PeerConnection, offer pion.SessionDescription) (pion.SessionDescription, error) {
 	if err := conn.SetRemoteDescription(offer); err != nil {
-		return "", err
+		return pion.SessionDescription{}, err
 	}
 
 	answer, err := conn.CreateAnswer(nil)
 	if err != nil {
-		return "", err
+		return answer, err
 	}
 
 	err = conn.SetLocalDescription(answer)
 	if err != nil {
-		return "", err
+		return answer, err
 	}
 
-	return answer.SDP, nil
+	return answer, nil
 }
 
-func (w *webRTC) onIceCandidate(conn *PeerConnection, sdp string) error {
-	if err := conn.AddICECandidate(pion.ICECandidateInit{Candidate: sdp}); err != nil {
+func (w *webRTC) onIceCandidate(conn *PeerConnection, candidate pion.ICECandidateInit) error {
+	if err := conn.AddICECandidate(candidate); err != nil {
 		return err
 	}
 

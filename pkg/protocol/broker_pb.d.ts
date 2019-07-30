@@ -91,8 +91,10 @@ export class WebRtcMessage extends jspb.Message {
   getToAlias(): number;
   setToAlias(value: number): void;
 
-  getSdp(): string;
-  setSdp(value: string): void;
+  getData(): Uint8Array | string;
+  getData_asU8(): Uint8Array;
+  getData_asB64(): string;
+  setData(value: Uint8Array | string): void;
 
   serializeBinary(): Uint8Array;
   toObject(includeInstance?: boolean): WebRtcMessage.AsObject;
@@ -109,7 +111,7 @@ export namespace WebRtcMessage {
     type: MessageType,
     fromAlias: number,
     toAlias: number,
-    sdp: string,
+    data: Uint8Array | string,
   }
 }
 

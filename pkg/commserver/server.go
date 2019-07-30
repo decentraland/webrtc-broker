@@ -2,6 +2,7 @@ package commserver
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -406,8 +407,8 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	log := s.Log
 	establishSessionTimeout := state.establishSessionTimeout
 	log.WithFields(logging.Fields{"serverAlias": state.alias, "peer": alias}).Debug("init peer")
-	conn, err := s.WebRtc.newConnection(alias)
 
+	conn, err := s.WebRtc.newConnection(alias)
 	if err != nil {
 		log.WithError(err).Error("error creating new peer connection")
 		return nil, err
@@ -425,6 +426,30 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		unregisterQueue: state.unregisterQueue,
 		role:            role,
 	}
+
+	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
+		if candidate == nil {
+			log.WithField("peer", alias).Debug("finish collecting candidates")
+			return
+		}
+
+		iceCandidateInit := candidate.ToJSON()
+		serializedCandidate, err := json.Marshal(iceCandidateInit)
+		if err != nil {
+			log.WithField("peer", alias).WithError(err).Error("cannot serialize candidate")
+			return
+		}
+
+		err = state.coordinator.Send(state, &protocol.WebRtcMessage{
+			Type:    protocol.MessageType_WEBRTC_ICE_CANDIDATE,
+			Data:    serializedCandidate,
+			ToAlias: alias,
+		})
+		if err != nil {
+			log.WithField("peer", alias).WithError(err).Error("cannot send ICE candidate")
+			return
+		}
+	})
 
 	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
 		log.
@@ -687,9 +712,15 @@ func processConnect(state *State, alias uint64) error {
 		return err
 	}
 
+	serializedOffer, err := json.Marshal(offer)
+	if err != nil {
+		log.WithField("peer", alias).WithError(err).Error("cannot serialize offer")
+		return err
+	}
+
 	return state.coordinator.Send(state, &protocol.WebRtcMessage{
 		Type:    protocol.MessageType_WEBRTC_OFFER,
-		Sdp:     offer,
+		Data:    serializedOffer,
 		ToAlias: alias,
 	})
 }
@@ -779,26 +810,49 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 	switch webRtcMessage.Type {
 	case protocol.MessageType_WEBRTC_OFFER:
 		p.log().Debug("webrtc offer received")
-		answer, err := state.services.WebRtc.onOffer(p.conn, webRtcMessage.Sdp)
+		offer := pion.SessionDescription{}
+		err := json.Unmarshal(webRtcMessage.Data, &offer)
+		if err != nil {
+			log.WithError(err).Error("error unmarshalling offer")
+			return err
+		}
+
+		answer, err := state.services.WebRtc.onOffer(p.conn, offer)
 		if err != nil {
 			log.WithError(err).Error("error setting webrtc offer")
 			return err
 		}
 
+		serializedAnswer, err := json.Marshal(answer)
+		if err != nil {
+			log.WithField("peer", alias).WithError(err).Error("cannot serialize answer")
+			return err
+		}
+
 		return state.coordinator.Send(state, &protocol.WebRtcMessage{
 			Type:    protocol.MessageType_WEBRTC_ANSWER,
-			Sdp:     answer,
+			Data:    serializedAnswer,
 			ToAlias: p.alias,
 		})
 	case protocol.MessageType_WEBRTC_ANSWER:
 		p.log().Debug("webrtc answer received")
-		if err := state.services.WebRtc.onAnswer(p.conn, webRtcMessage.Sdp); err != nil {
+		answer := pion.SessionDescription{}
+		if err := json.Unmarshal(webRtcMessage.Data, &answer); err != nil {
+			log.WithError(err).Error("error unmarshalling answer")
+			return err
+		}
+		if err := state.services.WebRtc.onAnswer(p.conn, answer); err != nil {
 			log.WithError(err).Error("error setting webrtc answer")
 			return err
 		}
 	case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 		p.log().Debug("ice candidate received")
-		if err := state.services.WebRtc.onIceCandidate(p.conn, webRtcMessage.Sdp); err != nil {
+		candidate := pion.ICECandidateInit{}
+		if err := json.Unmarshal(webRtcMessage.Data, &candidate); err != nil {
+			log.WithError(err).Error("error unmarshalling candidate")
+			return err
+		}
+		if err := state.services.WebRtc.onIceCandidate(p.conn, candidate); err != nil {
 			log.WithError(err).Error("error adding remote ice candidate")
 			return err
 		}

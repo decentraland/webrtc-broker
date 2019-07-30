@@ -1,6 +1,7 @@
 package commserver
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
@@ -92,23 +93,23 @@ func (m *mockWebRtc) registerOpenHandler(dc *DataChannel, handler func()) {
 	m.Called(dc, handler)
 }
 
-func (m *mockWebRtc) createOffer(conn *PeerConnection) (string, error) {
+func (m *mockWebRtc) createOffer(conn *PeerConnection) (pion.SessionDescription, error) {
 	args := m.Called(conn)
-	return args.String(0), args.Error(1)
+	return args.Get(0).(pion.SessionDescription), args.Error(1)
 }
 
-func (m *mockWebRtc) onAnswer(conn *PeerConnection, sdp string) error {
-	args := m.Called(conn, sdp)
+func (m *mockWebRtc) onAnswer(conn *PeerConnection, answer pion.SessionDescription) error {
+	args := m.Called(conn, answer)
 	return args.Error(0)
 }
 
-func (m *mockWebRtc) onOffer(conn *PeerConnection, sdp string) (string, error) {
-	args := m.Called(conn, sdp)
-	return args.String(0), args.Error(1)
+func (m *mockWebRtc) onOffer(conn *PeerConnection, offer pion.SessionDescription) (pion.SessionDescription, error) {
+	args := m.Called(conn, offer)
+	return args.Get(0).(pion.SessionDescription), args.Error(1)
 }
 
-func (m *mockWebRtc) onIceCandidate(conn *PeerConnection, sdp string) error {
-	args := m.Called(conn, sdp)
+func (m *mockWebRtc) onIceCandidate(conn *PeerConnection, candidate pion.ICECandidateInit) error {
+	args := m.Called(conn, candidate)
 	return args.Error(0)
 }
 
@@ -506,12 +507,20 @@ func setupAuthExchangeTest(config authExchangeTestConfig) *authExchangeTest {
 	return test
 }
 
+func newConnection(t *testing.T) *pion.PeerConnection {
+	s := pion.SettingEngine{}
+	api := pion.NewAPI(pion.WithSettingEngine(s))
+	conn, err := api.NewPeerConnection(pion.Configuration{})
+	require.NoError(t, err)
+	return conn
+}
+
 func TestInitPeer(t *testing.T) {
 	t.Run("if no connection is establish eventually the peer is unregistered", func(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -552,7 +561,7 @@ func TestInitPeer(t *testing.T) {
 		defer closeState(state)
 
 		var reliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -595,7 +604,7 @@ func TestInitPeer(t *testing.T) {
 		defer closeState(state)
 
 		var reliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -640,7 +649,7 @@ func TestInitPeer(t *testing.T) {
 		defer closeState(state)
 
 		var reliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -686,7 +695,7 @@ func TestInitPeer(t *testing.T) {
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -736,7 +745,7 @@ func TestInitPeer(t *testing.T) {
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -784,7 +793,7 @@ func TestInitPeer(t *testing.T) {
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		reliableDC := &pion.DataChannel{}
 		unreliableDC := &pion.DataChannel{}
 
@@ -1037,20 +1046,21 @@ func TestReadUnreliablePump(t *testing.T) {
 
 func TestProcessConnect(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		conn1 := &pion.PeerConnection{}
-		conn2 := &pion.PeerConnection{}
+		conn1 := newConnection(t)
+		conn2 := newConnection(t)
 		dc := &pion.DataChannel{}
 
+		offer := pion.SessionDescription{}
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn1, nil).Once().
 			On("isNew", conn1).Return(true).Once().
 			On("close", conn1).Return(nil).Once().
-			On("createOffer", conn1).Return("offer", nil).Once().
+			On("createOffer", conn1).Return(offer, nil).Once().
 			On("newConnection", uint64(2)).Return(conn2, nil).Once().
 			On("isNew", conn2).Return(true).Once().
 			On("close", conn2).Return(nil).Once().
-			On("createOffer", conn2).Return("offer", nil).Once().
+			On("createOffer", conn2).Return(offer, nil).Once().
 			On("createReliableDataChannel", mock.Anything).Return(dc, nil).
 			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
@@ -1074,7 +1084,7 @@ func TestProcessConnect(t *testing.T) {
 	})
 
 	t.Run("create offer error", func(t *testing.T) {
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		dc := &pion.DataChannel{}
 
 		webRtc := &mockWebRtc{}
@@ -1082,7 +1092,7 @@ func TestProcessConnect(t *testing.T) {
 			On("newConnection", uint64(1)).Return(conn, nil).
 			On("isNew", conn).Return(true).Once().
 			On("close", conn).Return(nil).Once().
-			On("createOffer", conn).Return("", errors.New("cannot create offer")).Once().
+			On("createOffer", conn).Return(pion.SessionDescription{}, errors.New("cannot create offer")).Once().
 			On("createReliableDataChannel", conn).Return(dc, nil).
 			On("createUnreliableDataChannel", conn).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
@@ -1253,15 +1263,20 @@ func TestUnregister(t *testing.T) {
 
 func TestProcessWebRtcMessage(t *testing.T) {
 	t.Run("webrtc offer (on a new peer)", func(t *testing.T) {
-		conn := &pion.PeerConnection{}
+		conn := newConnection(t)
 		dc := &pion.DataChannel{}
+
+		offer := pion.SessionDescription{
+			Type: pion.SDPTypeOffer,
+			SDP:  "sdp",
+		}
 
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn, nil).Once().
 			On("isNew", conn).Return(true).Once().
 			On("close", conn).Return(nil).Once().
-			On("onOffer", conn, "sdp-offer").Return("sdp-answer", nil).Once().
+			On("onOffer", conn, offer).Return(pion.SessionDescription{}, nil).Once().
 			On("createReliableDataChannel", conn).Return(dc, nil).Once().
 			On("createUnreliableDataChannel", conn).Return(dc, nil).Once().
 			On("registerOpenHandler", mock.Anything, mock.Anything)
@@ -1270,9 +1285,12 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		state := makeTestState(t, config)
 		defer closeState(state)
 
+		data, err := json.Marshal(offer)
+		require.NoError(t, err)
+
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
-			Sdp:       "sdp-offer",
+			Data:      data,
 			FromAlias: 1,
 		}
 
@@ -1288,9 +1306,14 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc offer", func(t *testing.T) {
+		offer := pion.SessionDescription{
+			Type: pion.SDPTypeOffer,
+			SDP:  "sdp",
+		}
+
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", nil).Twice()
+			On("onOffer", mock.Anything, offer).Return(pion.SessionDescription{}, nil).Twice()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
@@ -1299,15 +1322,18 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		p := addPeer(state, makeClient(1, state.services))
 		p2 := addPeer(state, makeClient(2, state.services))
 
+		data, err := json.Marshal(offer)
+		require.NoError(t, err)
+
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
-			Sdp:       "sdp-offer",
+			Data:      data,
 			FromAlias: p.alias,
 		}
 
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
-			Sdp:       "sdp-offer",
+			Data:      data,
 			FromAlias: p2.alias,
 		}
 
@@ -1320,18 +1346,28 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc offer (offer error)", func(t *testing.T) {
+		offer := pion.SessionDescription{
+			Type: pion.SDPTypeOffer,
+			SDP:  "sdp",
+		}
+
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onOffer", mock.Anything, "sdp-offer").Return("sdp-answer", errors.New("offer error")).Once()
+			On("onOffer", mock.Anything, offer).
+			Return(pion.SessionDescription{}, errors.New("offer error")).
+			Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
+		data, err := json.Marshal(offer)
+		require.NoError(t, err)
+
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
-			Sdp:       "sdp-offer",
+			Data:      data,
 			FromAlias: p.alias,
 		}
 
@@ -1344,18 +1380,26 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc answer", func(t *testing.T) {
+		answer := pion.SessionDescription{
+			Type: pion.SDPTypeAnswer,
+			SDP:  "sdp",
+		}
+
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onAnswer", mock.Anything, "sdp-answer").Return(nil).Once()
+			On("onAnswer", mock.Anything, answer).Return(nil).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
 		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
+		data, err := json.Marshal(answer)
+		require.NoError(t, err)
+
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ANSWER,
-			Sdp:       "sdp-answer",
+			Data:      data,
 			FromAlias: p.alias,
 		}
 
@@ -1367,9 +1411,10 @@ func TestProcessWebRtcMessage(t *testing.T) {
 	})
 
 	t.Run("webrtc ice candidate", func(t *testing.T) {
+		candidate := pion.ICECandidateInit{Candidate: "sdp-candidate"}
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onIceCandidate", mock.Anything, "sdp-candidate").Return(nil).Once()
+			On("onIceCandidate", mock.Anything, candidate).Return(nil).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
@@ -1377,9 +1422,11 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		p := addPeer(state, makeClient(1, state.services))
 
+		data, err := json.Marshal(candidate)
+		require.NoError(t, err)
 		state.webRtcControlQueue <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ICE_CANDIDATE,
-			Sdp:       "sdp-candidate",
+			Data:      data,
 			FromAlias: p.alias,
 		}
 

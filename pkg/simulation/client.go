@@ -2,9 +2,11 @@ package simulation
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"log"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
@@ -120,8 +122,8 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 
 	s := pion.SettingEngine{}
 	s.DetachDataChannels()
+	s.SetTrickle(true)
 	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: alias}
-
 	api := pion.NewAPI(pion.WithSettingEngine(s))
 
 	webRtcConfig := pion.Configuration{ICEServers: client.iceServers}
@@ -135,9 +137,33 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	msg := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT, ToAlias: serverAlias}
 	bytes, err := proto.Marshal(msg)
 	if err != nil {
-		return err
+		log.WithError(err).Fatal("cannot marshall connect message")
 	}
 	client.coordinatorWriteQueue <- bytes
+
+	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
+		if candidate == nil {
+			log.WithField("peer", alias).Debug("finish collecting candidates")
+			return
+		}
+
+		iceCandidateInit := candidate.ToJSON()
+		serializedCandidate, err := json.Marshal(iceCandidateInit)
+		if err != nil {
+			log.WithField("peer", alias).WithError(err).Error("cannot serialize candidate")
+			return
+		}
+		msg := protocol.WebRtcMessage{
+			Type:    protocol.MessageType_WEBRTC_ICE_CANDIDATE,
+			Data:    serializedCandidate,
+			ToAlias: alias,
+		}
+		bytes, err := proto.Marshal(&msg)
+		if err != nil {
+			log.WithError(err).Fatal("cannot serialize ice candidate message")
+		}
+		client.coordinatorWriteQueue <- bytes
+	})
 
 	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
 		log.Println("ICE Connection State has changed: ", connectionState.String())
@@ -333,15 +359,15 @@ func (client *Client) startCoordination() error {
 		case protocol.MessageType_WEBRTC_OFFER:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
+				log.Error("error unmarshalling webrtc message")
 				return err
-
 			}
 
 			log.Println("offer received from: ", webRtcMessage.FromAlias)
 
-			offer := pion.SessionDescription{
-				Type: pion.SDPTypeOffer,
-				SDP:  webRtcMessage.Sdp,
+			offer := pion.SessionDescription{}
+			if err := json.Unmarshal(webRtcMessage.Data, &offer); err != nil {
+				log.WithError(err).Fatal("error unmarshalling webrtc message")
 			}
 
 			if err := client.conn.SetRemoteDescription(offer); err != nil {
@@ -353,14 +379,18 @@ func (client *Client) startCoordination() error {
 				log.Fatal("error creating webrtc answer", err)
 			}
 
-			err = client.conn.SetLocalDescription(answer)
-			if err != nil {
+			if err = client.conn.SetLocalDescription(answer); err != nil {
 				log.Fatal("error setting local description", err)
+			}
+
+			serializedAnswer, err := json.Marshal(answer)
+			if err != nil {
+				log.WithError(err).Fatal("cannot serialize answer")
 			}
 
 			answerWebRtcMessage := &protocol.WebRtcMessage{
 				Type:    protocol.MessageType_WEBRTC_ANSWER,
-				Sdp:     answer.SDP,
+				Data:    serializedAnswer,
 				ToAlias: webRtcMessage.FromAlias,
 			}
 			bytes, err := proto.Marshal(answerWebRtcMessage)
@@ -369,6 +399,20 @@ func (client *Client) startCoordination() error {
 			}
 
 			client.coordinatorWriteQueue <- bytes
+		case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
+			webRtcMessage := &protocol.WebRtcMessage{}
+			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
+				log.Error("error unmarshalling webrtc message")
+				return err
+			}
+			log.Debug("ice candidate received")
+			candidate := pion.ICECandidateInit{}
+			if err := json.Unmarshal(webRtcMessage.Data, &candidate); err != nil {
+				log.WithError(err).Fatal("error unmarshalling candidate")
+			}
+			if err := client.conn.AddICECandidate(candidate); err != nil {
+				log.WithError(err).Fatal("error adding remote ice candidate")
+			}
 		}
 	}
 }
