@@ -459,6 +459,9 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		if connectionState == pion.ICEConnectionStateDisconnected {
 			log.WithField("peer", alias).Debug("Connection state is disconnected, closing connection")
 			p.Close()
+		} else if connectionState == pion.ICEConnectionStateFailed {
+			log.WithField("peer", alias).Debug("Connection state is failed, closing connection")
+			p.Close()
 		}
 	})
 
