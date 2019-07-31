@@ -68,6 +68,7 @@ func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 
 	conn, err := api.NewPeerConnection(pion.Configuration{
 		ICEServers: w.ICEServers,
+		ICETransportPolicy: pion.ICETransportPolicyRelay,
 	})
 	if err != nil {
 		return nil, err
