@@ -14,6 +14,7 @@ type Stats struct {
 // PeerStats expose peer stats
 type PeerStats struct {
 	Alias      uint64
+	Identity   []byte
 	State      ICEConnectionState
 	TopicCount uint32
 
@@ -76,6 +77,7 @@ func report(state *State) {
 		report := state.services.WebRtc.getStats(p.conn)
 		stats := PeerStats{
 			Alias:      p.alias,
+			Identity:   p.GetIdentity(),
 			TopicCount: uint32(len(p.topics)),
 			State:      p.conn.ICEConnectionState(),
 		}

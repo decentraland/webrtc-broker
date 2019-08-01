@@ -3,13 +3,15 @@ package commserver
 import (
 	"time"
 
+	"sync/atomic"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
 
 type peer struct {
 	alias    uint64
-	identity []byte
+	identity atomic.Value
 
 	topics map[string]struct{}
 	index  int
@@ -31,6 +33,16 @@ type peer struct {
 	serverAlias uint64
 	conn        *PeerConnection
 	role        protocol.Role
+}
+
+func (p *peer) GetIdentity() []byte {
+	identityAtom := p.identity.Load()
+	var identity []byte
+	if identityAtom != nil {
+		identity = identityAtom.([]byte)
+	}
+
+	return identity
 }
 
 func (p *peer) log() *logging.Entry {
@@ -260,8 +272,9 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 		topicIdentityFWMessage.FromAlias = p.alias
 		message.FromAlias = p.alias
 
-		topicIdentityFWMessage.Identity = p.identity
-		message.Identity = p.identity
+		identity := p.GetIdentity()
+		topicIdentityFWMessage.Identity = identity
+		message.Identity = identity
 
 		topicIdentityFWMessage.Role = p.role
 		message.Role = p.role

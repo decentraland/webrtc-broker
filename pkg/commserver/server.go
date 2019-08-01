@@ -551,7 +551,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 
 			if isValid {
 				p.role = authMessage.Role
-				p.identity = identity
+				p.identity.Store(identity)
 				p.log().Debug("peer authorized")
 				if p.role == protocol.Role_COMMUNICATION_SERVER {
 					state.subscriptionsLock.Lock()
