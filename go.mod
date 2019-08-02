@@ -6,7 +6,7 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/pion/datachannel v1.4.5
 	github.com/pion/logging v0.2.2
-	github.com/pion/webrtc/v2 v2.1.2-0.20190801181744-289ce70816e8
+	github.com/pion/webrtc/v2 v2.1.2
 	github.com/sirupsen/logrus v1.3.0
 	github.com/stretchr/testify v1.3.0
 	golang.org/x/sync v0.0.0-20181221193216-37e7f081c4d4 // indirect
