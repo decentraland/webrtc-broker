@@ -29,10 +29,7 @@ func printTitle(title string) {
 	log.Println(s)
 }
 
-func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string, string) {
-	host := "localhost"
-	port := 9999
-	addr := fmt.Sprintf("%s:%d", host, port)
+func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string) {
 
 	log := logrus.New()
 	auth := &authentication.NoopAuthenticator{}
@@ -56,20 +53,18 @@ func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string, s
 
 	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := coordinator.UpgradeRequest(state, protocol.Role_CLIENT, w, r)
-
 		require.NoError(t, err)
 		coordinator.ConnectClient(state, ws)
 	})
 
+	addr := "localhost:9999"
 	s := &http.Server{Addr: addr, Handler: mux}
 	go func() {
 		t.Log("starting coordinator")
 		s.ListenAndServe()
 	}()
 
-	discoveryURL := fmt.Sprintf("ws://%s/discover", addr)
-	connectURL := fmt.Sprintf("ws://%s/connect", addr)
-	return state, s, discoveryURL, connectURL
+	return state, s, fmt.Sprintf("ws://%s", addr)
 }
 
 type peerSnapshot struct {
@@ -103,7 +98,7 @@ func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 	return <-r.Data
 }
 
-func startCommServer(t *testing.T, discoveryURL string) *testReporter {
+func startCommServer(t *testing.T, coordinatorURL string) *testReporter {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	auth := &authentication.NoopAuthenticator{}
@@ -116,14 +111,14 @@ func startCommServer(t *testing.T, discoveryURL string) *testReporter {
 	config := commserver.Config{
 		Auth:           auth,
 		Log:            logger,
-		CoordinatorURL: discoveryURL,
+		CoordinatorURL: coordinatorURL,
 		ReportPeriod:   1 * time.Second,
 		Reporter:       func(stats commserver.Stats) { reporter.Report(stats) },
 	}
 
 	ws, err := commserver.MakeState(&config)
 	require.NoError(t, err)
-	t.Log("starting communication server node", discoveryURL)
+	t.Log("starting communication server node")
 
 	require.NoError(t, commserver.ConnectCoordinator(ws))
 	go commserver.ProcessMessagesQueue(ws)
@@ -145,14 +140,14 @@ type recvMessage struct {
 }
 
 func TestE2E(t *testing.T) {
-	_, server, discoveryURL, connectURL := startCoordinator(t)
+	_, server, coordinatorURL := startCoordinator(t)
 	defer server.Close()
 
 	topicFWMessage := protocol.TopicFWMessage{}
 
 	printTitle("starting comm servers")
-	comm1Reporter := startCommServer(t, discoveryURL)
-	comm2Reporter := startCommServer(t, discoveryURL)
+	comm1Reporter := startCommServer(t, coordinatorURL)
+	comm2Reporter := startCommServer(t, coordinatorURL)
 
 	auth := &authentication.NoopAuthenticator{}
 
@@ -162,7 +157,7 @@ func TestE2E(t *testing.T) {
 	log := logrus.New()
 	config := Config{
 		Auth:           auth,
-		CoordinatorURL: connectURL,
+		CoordinatorURL: coordinatorURL,
 		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
 			m := recvMessage{msgType: msgType, raw: raw}
 			if reliable {
@@ -179,7 +174,7 @@ func TestE2E(t *testing.T) {
 	c2ReceivedUnreliable := make(chan recvMessage, 256)
 	config = Config{
 		Auth:           auth,
-		CoordinatorURL: connectURL,
+		CoordinatorURL: coordinatorURL,
 		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
 			m := recvMessage{msgType: msgType, raw: raw}
 			if reliable {

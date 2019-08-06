@@ -58,12 +58,12 @@ func (a *NoopAuthenticator) GenerateClientAuthMessage() (*protocol.AuthMessage, 
 
 // GenerateServerConnectURL generates CoordinatorURL with no parameters
 func (a *NoopAuthenticator) GenerateServerConnectURL(coordinatorURL string) (string, error) {
-	u := fmt.Sprintf("%s?method=noop", coordinatorURL)
+	u := fmt.Sprintf("%s/discover", coordinatorURL)
 	return u, nil
 }
 
 // GenerateClientConnectURL generates CoordinatorURL with no parameters
 func (a *NoopAuthenticator) GenerateClientConnectURL(coordinatorURL string) (string, error) {
-	u := fmt.Sprintf("%s?method=noop", coordinatorURL)
+	u := fmt.Sprintf("%s/connect", coordinatorURL)
 	return u, nil
 }
