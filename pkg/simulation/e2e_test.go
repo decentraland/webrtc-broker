@@ -158,6 +158,8 @@ func TestE2E(t *testing.T) {
 
 	c1ReceivedReliable := make(chan recvMessage, 256)
 	c1ReceivedUnreliable := make(chan recvMessage, 256)
+
+	log := logrus.New()
 	config := Config{
 		Auth:           auth,
 		CoordinatorURL: connectURL,
@@ -169,6 +171,7 @@ func TestE2E(t *testing.T) {
 				c1ReceivedUnreliable <- m
 			}
 		},
+		Log: log,
 	}
 	c1 := MakeClient(&config)
 
@@ -185,6 +188,7 @@ func TestE2E(t *testing.T) {
 				c2ReceivedUnreliable <- m
 			}
 		},
+		Log: log,
 	}
 	c2 := MakeClient(&config)
 
