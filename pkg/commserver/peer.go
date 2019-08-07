@@ -1,8 +1,6 @@
 package commserver
 
 import (
-	"time"
-
 	"sync/atomic"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -196,7 +194,6 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 
 	msg := &peerMessage{
 		fromServer: p.role == protocol.Role_COMMUNICATION_SERVER,
-		receivedAt: time.Now(),
 		reliable:   reliable,
 		topic:      message.Topic,
 		from:       p,
@@ -253,7 +250,6 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 
 	msg := &peerMessage{
 		fromServer: p.role == protocol.Role_COMMUNICATION_SERVER,
-		receivedAt: time.Now(),
 		reliable:   reliable,
 		topic:      message.Topic,
 		from:       p,

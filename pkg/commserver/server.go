@@ -29,7 +29,6 @@ type topicChange struct {
 }
 
 type peerMessage struct {
-	receivedAt     time.Time
 	fromServer     bool
 	reliable       bool
 	topic          string
