@@ -188,11 +188,11 @@ type State struct {
 	services                services
 	coordinator             *coordinator
 	peers                   []*peer
-	topicQueue              chan topicChange
-	connectQueue            chan uint64
-	webRtcControlQueue      chan *protocol.WebRtcMessage
-	messagesQueue           chan *peerMessage
-	unregisterQueue         chan *peer
+	topicCh                 chan topicChange
+	connectCh               chan uint64
+	webRtcControlCh         chan *protocol.WebRtcMessage
+	messagesCh              chan *peerMessage
+	unregisterCh            chan *peer
 	stop                    chan bool
 	softStop                bool
 	reportPeriod            time.Duration
@@ -252,11 +252,11 @@ func MakeState(config *Config) (*State, error) {
 		peers:                   make([]*peer, 0),
 		subscriptions:           make(topicSubscriptions),
 		stop:                    make(chan bool),
-		unregisterQueue:         make(chan *peer, 255),
-		topicQueue:              make(chan topicChange, 255),
-		connectQueue:            make(chan uint64, 255),
-		messagesQueue:           make(chan *peerMessage, 255),
-		webRtcControlQueue:      make(chan *protocol.WebRtcMessage, 255),
+		unregisterCh:            make(chan *peer, 255),
+		topicCh:                 make(chan topicChange, 255),
+		connectCh:               make(chan uint64, 255),
+		messagesCh:              make(chan *peerMessage, 255),
+		webRtcControlCh:         make(chan *protocol.WebRtcMessage, 255),
 		reporter:                config.Reporter,
 		reportPeriod:            reportPeriod,
 		establishSessionTimeout: establishSessionTimeout,
@@ -301,11 +301,11 @@ func ConnectCoordinator(state *State) error {
 
 func closeState(state *State) {
 	state.coordinator.Close()
-	close(state.webRtcControlQueue)
-	close(state.connectQueue)
-	close(state.topicQueue)
-	close(state.messagesQueue)
-	close(state.unregisterQueue)
+	close(state.webRtcControlCh)
+	close(state.connectCh)
+	close(state.topicCh)
+	close(state.messagesCh)
+	close(state.unregisterCh)
 	close(state.stop)
 }
 
@@ -314,15 +314,15 @@ func ProcessMessagesQueue(state *State) {
 	log := state.services.Log
 	for {
 		select {
-		case msg, ok := <-state.messagesQueue:
+		case msg, ok := <-state.messagesCh:
 			if !ok {
 				log.Info().Msg("exiting process message loop")
 				return
 			}
 			processTopicMessage(state, msg)
-			n := len(state.messagesQueue)
+			n := len(state.messagesCh)
 			for i := 0; i < n; i++ {
-				msg = <-state.messagesQueue
+				msg = <-state.messagesCh
 				processTopicMessage(state, msg)
 			}
 		case <-state.stop:
@@ -355,32 +355,32 @@ func Process(state *State) {
 
 	for {
 		select {
-		case alias := <-state.connectQueue:
+		case alias := <-state.connectCh:
 			ignoreError(processConnect(state, alias))
-			n := len(state.connectQueue)
+			n := len(state.connectCh)
 			for i := 0; i < n; i++ {
-				alias := <-state.connectQueue
+				alias := <-state.connectCh
 				ignoreError(processConnect(state, alias))
 			}
-		case change := <-state.topicQueue:
+		case change := <-state.topicCh:
 			ignoreError(processSubscriptionChange(state, change))
-			n := len(state.topicQueue)
+			n := len(state.topicCh)
 			for i := 0; i < n; i++ {
-				change := <-state.topicQueue
+				change := <-state.topicCh
 				ignoreError(processSubscriptionChange(state, change))
 			}
-		case p := <-state.unregisterQueue:
+		case p := <-state.unregisterCh:
 			ignoreError(processUnregister(state, p))
-			n := len(state.unregisterQueue)
+			n := len(state.unregisterCh)
 			for i := 0; i < n; i++ {
-				p = <-state.unregisterQueue
+				p = <-state.unregisterCh
 				ignoreError(processUnregister(state, p))
 			}
-		case webRtcMessage := <-state.webRtcControlQueue:
+		case webRtcMessage := <-state.webRtcControlCh:
 			ignoreError(processWebRtcControlMessage(state, webRtcMessage))
-			n := len(state.webRtcControlQueue)
+			n := len(state.webRtcControlCh)
 			for i := 0; i < n; i++ {
-				webRtcMessage = <-state.webRtcControlQueue
+				webRtcMessage = <-state.webRtcControlCh
 				ignoreError(processWebRtcControlMessage(state, webRtcMessage))
 			}
 		case <-ticker.C:
@@ -413,16 +413,16 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	}
 
 	p := &peer{
-		alias:           alias,
-		services:        s,
-		topics:          make(map[string]struct{}),
-		index:           len(state.peers),
-		conn:            conn,
-		topicQueue:      state.topicQueue,
-		messagesQueue:   state.messagesQueue,
-		unregisterQueue: state.unregisterQueue,
-		role:            role,
-		log:             log.With().Uint64("serverAlias", state.alias).Uint64("peer", alias).Logger(),
+		alias:        alias,
+		services:     s,
+		topics:       make(map[string]struct{}),
+		index:        len(state.peers),
+		conn:         conn,
+		topicCh:      state.topicCh,
+		messagesCh:   state.messagesCh,
+		unregisterCh: state.unregisterCh,
+		role:         role,
+		log:          log.With().Uint64("serverAlias", state.alias).Uint64("peer", alias).Logger(),
 	}
 
 	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
@@ -561,17 +561,11 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 						return
 					}
 
-					zipped, err := state.services.Zipper.Zip(topics)
-					if err != nil {
-						p.log.Error().Err(err).Msg("zip failure")
-						p.Close()
-						return
-					}
 					topicSubscriptionMessage := &protocol.SubscriptionMessage{
 						Type:   protocol.MessageType_SUBSCRIPTION,
-						Format: protocol.Format_GZIP,
+						Format: protocol.Format_PLAIN,
+						Topics: topics,
 					}
-					topicSubscriptionMessage.Topics = zipped
 
 					rawMsg, err := state.services.Marshaller.Marshal(topicSubscriptionMessage)
 					if err != nil {
@@ -797,15 +791,15 @@ func processSubscriptionChange(state *State, change topicChange) error {
 
 func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMessage) error {
 	log := state.services.Log
-
 	alias := webRtcMessage.FromAlias
+
 	p := findPeer(state.peers, alias)
 	if p == nil {
-		np, err := initPeer(state, alias, protocol.Role_UNKNOWN_ROLE)
+		var err error
+		p, err = initPeer(state, alias, protocol.Role_UNKNOWN_ROLE)
 		if err != nil {
 			return err
 		}
-		p = np
 	}
 
 	switch webRtcMessage.Type {
@@ -814,19 +808,19 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 		offer := pion.SessionDescription{}
 		err := json.Unmarshal(webRtcMessage.Data, &offer)
 		if err != nil {
-			log.Error().Err(err).Msg("error unmarshalling offer")
+			p.log.Error().Err(err).Msg("error unmarshalling offer")
 			return err
 		}
 
 		answer, err := state.services.WebRtc.onOffer(p.conn, offer)
 		if err != nil {
-			log.Error().Err(err).Msg("error setting webrtc offer")
+			p.log.Error().Err(err).Msg("error setting webrtc offer")
 			return err
 		}
 
 		serializedAnswer, err := json.Marshal(answer)
 		if err != nil {
-			log.Error().Err(err).Msg("cannot serialize answer")
+			p.log.Error().Err(err).Msg("cannot serialize answer")
 			return err
 		}
 
@@ -839,22 +833,22 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 		p.log.Debug().Msg("webrtc answer received")
 		answer := pion.SessionDescription{}
 		if err := json.Unmarshal(webRtcMessage.Data, &answer); err != nil {
-			log.Error().Err(err).Msg("error unmarshalling answer")
+			p.log.Error().Err(err).Msg("error unmarshalling answer")
 			return err
 		}
 		if err := state.services.WebRtc.onAnswer(p.conn, answer); err != nil {
-			log.Error().Err(err).Msg("error settinng webrtc answer")
+			p.log.Error().Err(err).Msg("error settinng webrtc answer")
 			return err
 		}
 	case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 		p.log.Debug().Msg("ice candidate received")
 		candidate := pion.ICECandidateInit{}
 		if err := json.Unmarshal(webRtcMessage.Data, &candidate); err != nil {
-			log.Error().Err(err).Msg("error unmarshalling candidate")
+			p.log.Error().Err(err).Msg("error unmarshalling candidate")
 			return err
 		}
 		if err := state.services.WebRtc.onIceCandidate(p.conn, candidate); err != nil {
-			log.Error().Err(err).Msg("error adding remote ice candidate")
+			p.log.Error().Err(err).Msg("error adding remote ice candidate")
 			return err
 		}
 	default:
@@ -927,15 +921,10 @@ func broadcastSubscriptionChange(state *State) error {
 		return err
 	}
 
-	encodedTopics, err := state.services.Zipper.Zip(topics)
-	if err != nil {
-		return err
-	}
-
 	message := &protocol.SubscriptionMessage{
 		Type:   protocol.MessageType_SUBSCRIPTION,
-		Format: protocol.Format_GZIP,
-		Topics: encodedTopics,
+		Format: protocol.Format_PLAIN,
+		Topics: topics,
 	}
 
 	rawMsg, err := state.services.Marshaller.Marshal(message)

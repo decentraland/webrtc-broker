@@ -6,9 +6,14 @@ import (
 
 // Stats expose comm server stats for reporting purposes
 type Stats struct {
-	Alias      uint64
-	TopicCount int
-	Peers      []PeerStats
+	Alias               uint64
+	TopicCount          int
+	TopicChSize         int
+	ConnectChSize       int
+	WebRtcControlChSize int
+	MessagesChSize      int
+	UnregisterChSize    int
+	Peers               []PeerStats
 }
 
 // PeerStats expose peer stats
@@ -68,9 +73,14 @@ func report(state *State) {
 	state.subscriptionsLock.RUnlock()
 
 	serverStats := Stats{
-		Alias:      state.alias,
-		TopicCount: topicCount,
-		Peers:      make([]PeerStats, len(state.peers)),
+		Alias:               state.alias,
+		TopicCount:          topicCount,
+		Peers:               make([]PeerStats, len(state.peers)),
+		TopicChSize:         len(state.topicCh),
+		ConnectChSize:       len(state.connectCh),
+		WebRtcControlChSize: len(state.webRtcControlCh),
+		MessagesChSize:      len(state.messagesCh),
+		UnregisterChSize:    len(state.unregisterCh),
 	}
 
 	for i, p := range state.peers {

@@ -45,3 +45,8 @@ func (s *Stats) Seen(t time.Time) {
 func (s *Stats) Avg() float64 {
 	return s.avgFreq.Avg()
 }
+
+// Samples return the amount of collected samples so far
+func (s *Stats) Samples() uint16 {
+	return s.avgFreq.Samples
+}

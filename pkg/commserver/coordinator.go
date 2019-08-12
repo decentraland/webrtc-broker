@@ -106,7 +106,7 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 				log.Debug().Err(err).Msg("decode webrtc message failure")
 				continue
 			}
-			state.webRtcControlQueue <- webRtcMessage
+			state.webRtcControlCh <- webRtcMessage
 		case protocol.MessageType_CONNECT:
 			connectMessage := &protocol.ConnectMessage{}
 			if err := marshaller.Unmarshal(bytes, connectMessage); err != nil {
@@ -114,7 +114,7 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 				continue
 			}
 			log.Debug().Uint64("to", connectMessage.FromAlias).Msg("Connect message received")
-			state.connectQueue <- connectMessage.FromAlias
+			state.connectCh <- connectMessage.FromAlias
 		default:
 			log.Debug().Str("type", msgType.String()).Msg("unhandled message from coordinator")
 		}

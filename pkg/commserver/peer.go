@@ -14,10 +14,10 @@ type peer struct {
 	topics map[string]struct{}
 	index  int
 
-	services        services
-	topicQueue      chan topicChange
-	messagesQueue   chan *peerMessage
-	unregisterQueue chan *peer
+	services     services
+	topicCh      chan topicChange
+	messagesCh   chan *peerMessage
+	unregisterCh chan *peer
 
 	reliableDC   *DataChannel
 	unreliableDC *DataChannel
@@ -56,7 +56,7 @@ func (p *peer) Close() {
 		return
 	}
 
-	p.unregisterQueue <- p
+	p.unregisterCh <- p
 }
 
 func (p *peer) readReliablePump() {
@@ -97,7 +97,7 @@ func (p *peer) readReliablePump() {
 				continue
 			}
 
-			p.topicQueue <- topicChange{
+			p.topicCh <- topicChange{
 				peer:      p,
 				format:    topicSubscriptionMessage.Format,
 				rawTopics: topicSubscriptionMessage.Topics,
@@ -214,7 +214,7 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 
 	msg.rawMsgToClient = rawMsgToClient
 
-	p.messagesQueue <- msg
+	p.messagesCh <- msg
 }
 
 func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
@@ -278,7 +278,7 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 
 	msg.rawMsgToClient = rawMsgToClient
 
-	p.messagesQueue <- msg
+	p.messagesCh <- msg
 }
 
 func (p *peer) WriteReliable(rawMsg []byte) error {

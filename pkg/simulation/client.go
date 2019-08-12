@@ -7,7 +7,6 @@ import (
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
-	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/websocket"
@@ -96,16 +95,10 @@ func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error
 		i++
 	}
 
-	gzip := commserver.GzipCompression{}
-	encodedTopics, err := gzip.Zip(buffer.Bytes())
-	if err != nil {
-		return err
-	}
-
 	message := &protocol.SubscriptionMessage{
 		Type:   protocol.MessageType_SUBSCRIPTION,
-		Format: protocol.Format_GZIP,
-		Topics: encodedTopics,
+		Format: protocol.Format_PLAIN,
+		Topics: buffer.Bytes(),
 	}
 
 	bytes, err := proto.Marshal(message)
@@ -167,8 +160,9 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	})
 
 	conn.OnICEConnectionStateChange(func(connectionState pion.ICEConnectionState) {
-		client.log.Info().Str("state", connectionState.String()).Msg("ICE Connection State has changed: ")
-		if connectionState == pion.ICEConnectionStateDisconnected {
+		client.log.Info().Str("state", connectionState.String()).Msg("ICE Connection State has changed")
+		if connectionState == pion.ICEConnectionStateDisconnected ||
+			connectionState == pion.ICEConnectionStateFailed {
 			if err := conn.Close(); err != nil {
 				client.log.Debug().Err(err).Msg("error closing on disconnect")
 			}
@@ -385,10 +379,6 @@ func (client *Client) startCoordination() error {
 				client.log.Fatal().Err(err).Msg("error creating webrtc answer")
 			}
 
-			if err = client.conn.SetLocalDescription(answer); err != nil {
-				client.log.Fatal().Err(err).Msg("error setting local description")
-			}
-
 			serializedAnswer, err := json.Marshal(answer)
 			if err != nil {
 				client.log.Fatal().Err(err).Msg("cannot serialize answer")
@@ -404,7 +394,13 @@ func (client *Client) startCoordination() error {
 				client.log.Fatal().Err(err).Msg("encode webrtc answer message failed")
 			}
 
+			client.log.Debug().Msg("send answer")
+
 			client.coordinatorWriteQueue <- bytes
+
+			if err = client.conn.SetLocalDescription(answer); err != nil {
+				client.log.Fatal().Err(err).Msg("error setting local description")
+			}
 		case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
