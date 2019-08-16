@@ -6,7 +6,7 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/pion/datachannel v1.4.5
 	github.com/pion/logging v0.2.2
-	github.com/pion/webrtc/v2 v2.1.3-0.20190813182150-62e4d1728c6c
+	github.com/pion/webrtc/v2 v2.1.3-0.20190816002428-d1e18d41d4d3
 	github.com/rs/zerolog v1.14.3
 	github.com/stretchr/objx v0.1.1 // indirect
 	github.com/stretchr/testify v1.3.0
