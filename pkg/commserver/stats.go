@@ -45,6 +45,12 @@ type PeerStats struct {
 	UnreliableBytesReceived    uint64
 	UnreliableMessagesSent     uint32
 	UnreliableMessagesReceived uint32
+
+	ICETransportBytesSent     uint64
+	ICETransportBytesReceived uint64
+
+	SCTPTransportBytesSent     uint64
+	SCTPTransportBytesReceived uint64
 }
 
 func report(state *State) {
@@ -118,6 +124,18 @@ func report(state *State) {
 			stats.UnreliableBytesSent = unreliableStats.BytesSent
 			stats.UnreliableMessagesReceived = unreliableStats.MessagesReceived
 			stats.UnreliableBytesReceived = unreliableStats.BytesReceived
+		}
+
+		iceTransportStats, ok := report["iceTransport"].(pion.TransportStats)
+		if ok {
+			stats.ICETransportBytesSent = iceTransportStats.BytesSent
+			stats.ICETransportBytesReceived = iceTransportStats.BytesReceived
+		}
+
+		sctpTransportStats, ok := report["sctpTransport"].(pion.TransportStats)
+		if ok {
+			stats.SCTPTransportBytesSent = sctpTransportStats.BytesSent
+			stats.SCTPTransportBytesReceived = sctpTransportStats.BytesReceived
 		}
 
 		for _, v := range report {
