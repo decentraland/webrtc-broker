@@ -74,6 +74,20 @@ func report(state *State) {
 		return candidateStats, ok
 	}
 
+	getTransportStats := func(report pion.StatsReport, statsID string) (pion.TransportStats, bool) {
+		stats, ok := report[statsID]
+		if !ok {
+			return pion.TransportStats{}, ok
+		}
+
+		transportStats, ok := stats.(pion.TransportStats)
+		if !ok {
+			log.Warn().Msgf("requested transport stats type %s, but is not from type TransportStats", statsID)
+		}
+
+		return transportStats, ok
+	}
+
 	state.subscriptionsLock.RLock()
 	topicCount := len(state.subscriptions)
 	state.subscriptionsLock.RUnlock()
@@ -126,13 +140,13 @@ func report(state *State) {
 			stats.UnreliableBytesReceived = unreliableStats.BytesReceived
 		}
 
-		iceTransportStats, ok := report["iceTransport"].(pion.TransportStats)
+		iceTransportStats, ok := getTransportStats(report, "iceTransport")
 		if ok {
 			stats.ICETransportBytesSent = iceTransportStats.BytesSent
 			stats.ICETransportBytesReceived = iceTransportStats.BytesReceived
 		}
 
-		sctpTransportStats, ok := report["sctpTransport"].(pion.TransportStats)
+		sctpTransportStats, ok := getTransportStats(report, "sctpTransport")
 		if ok {
 			stats.SCTPTransportBytesSent = sctpTransportStats.BytesSent
 			stats.SCTPTransportBytesReceived = sctpTransportStats.BytesReceived
