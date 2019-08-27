@@ -38,6 +38,10 @@ github.com/pion/ice v0.5.12/go.mod h1:FSTDLP+ian3PtxRjervtyDP2AOqt2c6cvfebZ7dwLn
 github.com/pion/logging v0.2.1/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
 github.com/pion/logging v0.2.2 h1:M9+AIj/+pxNsDfAT64+MAVgJO0rsyLnoJKCqf//DoeY=
 github.com/pion/logging v0.2.2/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
+github.com/pion/logging v0.2.3-0.20190827191644-fa022e4cb84c h1:zbE9ix1cTAmw4DLHo1k51PT/DYz0TlkihIqDNMVRvNk=
+github.com/pion/logging v0.2.3-0.20190827191644-fa022e4cb84c/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
+github.com/pion/logging/thirdparty/zerolog v0.0.0-20190827191644-fa022e4cb84c h1:IS69aZYK4q0cDeOSWIk399TRTL6bmyvndn6TffBQc0s=
+github.com/pion/logging/thirdparty/zerolog v0.0.0-20190827191644-fa022e4cb84c/go.mod h1:uihg/NJBKTuPZb7tkNg9MYfM/G2OisQAbP8rkshcYI4=
 github.com/pion/mdns v0.0.3 h1:DxdOYd0pgwLKiDlIIxfU0qdG5iWh1Xn6CsS9vc6cMAY=
 github.com/pion/mdns v0.0.3/go.mod h1:VrN3wefVgtfL8QgpEblPUC46ag1reLIfpqekCnKunLE=
 github.com/pion/quic v0.1.1 h1:D951FV+TOqI9A0rTF7tHx0Loooqz+nyzjEyj8o3PuMA=
@@ -71,6 +75,8 @@ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZN
 github.com/rs/xid v1.2.1/go.mod h1:+uKXf+4Djp6Md1KODXJxgGQPKngRmWyn10oCKFzNHOQ=
 github.com/rs/zerolog v1.14.3 h1:4EGfSkR2hJDB0s3oFfrlPqjU1e4WLncergLil3nEKW0=
 github.com/rs/zerolog v1.14.3/go.mod h1:3WXPzbXEEliJ+a6UFE4vhIxV8qR1EML6ngzP9ug4eYg=
+github.com/rs/zerolog v1.15.0 h1:uPRuwkWF4J6fGsJ2R0Gn2jB1EQiav9k3S6CSdygQJXY=
+github.com/rs/zerolog v1.15.0/go.mod h1:xYTKnLHcpfU2225ny5qZjxnj9NvkumZYjJHlAThCjNc=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.1.1 h1:2vfRuCMp5sSVIDSqO8oNnWJq7mPa6KVP3iPIwFBuy8A=
 github.com/stretchr/objx v0.1.1/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
