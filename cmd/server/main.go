@@ -42,7 +42,6 @@ func main() {
 		}()
 	}
 
-	config.CoordinatorURL = fmt.Sprintf("%s/discover", config.CoordinatorURL)
 	state, err := commserver.MakeState(&config)
 
 	if err != nil {

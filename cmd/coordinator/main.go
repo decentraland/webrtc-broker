@@ -18,10 +18,8 @@ func main() {
 	log := logging.New()
 	defer logging.LogPanic(log)
 
-	auth := authentication.NoopAuthenticator{}
-
 	config := coordinator.Config{
-		Auth: &auth,
+		Auth: &authentication.NoopAuthenticator{},
 		Log:  &log,
 	}
 	state := coordinator.MakeState(&config)
