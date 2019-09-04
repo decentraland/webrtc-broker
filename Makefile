@@ -6,6 +6,11 @@ build:
 	go build -o build/coordinator ./cmd/coordinator
 	go build -o build/server ./cmd/server
 
+buildtest:
+	go build -o build/densetest ./cmd/perftest/densetest
+
+buildall: build buildtest
+
 escape:
 	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/coordinator 2> build/escape.out
 	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/commserver  2>> build/escape.out
