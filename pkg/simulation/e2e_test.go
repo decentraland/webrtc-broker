@@ -30,7 +30,6 @@ func printTitle(title string) {
 }
 
 func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string) {
-
 	auth := &authentication.NoopAuthenticator{}
 	config := coordinator.Config{
 		ServerSelector: &coordinator.DefaultServerSelector{

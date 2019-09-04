@@ -3,6 +3,7 @@ package coordinator
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -51,6 +52,12 @@ func (r *DefaultServerSelector) ServerUnregistered(server *Peer) {
 	delete(r.ServerAliases, server.Alias)
 }
 
+type byAlias []uint64
+
+func (a byAlias) Len() int           { return len(a) }
+func (a byAlias) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a byAlias) Less(i, j int) bool { return a[i] < a[j] }
+
 // GetServerAliasList returns a list of tracked server aliases
 func (r *DefaultServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
 	peers := make([]uint64, 0, len(r.ServerAliases))
@@ -58,6 +65,8 @@ func (r *DefaultServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
 	for alias := range r.ServerAliases {
 		peers = append(peers, alias)
 	}
+
+	sort.Sort(byAlias(peers))
 
 	return peers
 }

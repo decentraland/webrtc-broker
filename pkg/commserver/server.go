@@ -193,8 +193,6 @@ type State struct {
 	webRtcControlCh         chan *protocol.WebRtcMessage
 	messagesCh              chan *peerMessage
 	unregisterCh            chan *peer
-	stop                    chan bool
-	softStop                bool
 	reportPeriod            time.Duration
 	establishSessionTimeout time.Duration
 
@@ -251,7 +249,6 @@ func MakeState(config *Config) (*State, error) {
 		},
 		peers:                   make([]*peer, 0),
 		subscriptions:           make(topicSubscriptions),
-		stop:                    make(chan bool),
 		unregisterCh:            make(chan *peer, 255),
 		topicCh:                 make(chan topicChange, 255),
 		connectCh:               make(chan uint64, 255),
@@ -299,43 +296,25 @@ func ConnectCoordinator(state *State) error {
 	return nil
 }
 
-func closeState(state *State) {
-	state.coordinator.Close()
-	close(state.webRtcControlCh)
-	close(state.connectCh)
-	close(state.topicCh)
-	close(state.messagesCh)
-	close(state.unregisterCh)
-	close(state.stop)
-}
-
 // ProcessMessagesQueue start the TOPIC message processor
 func ProcessMessagesQueue(state *State) {
 	log := state.services.Log
 	for {
-		select {
-		case msg, ok := <-state.messagesCh:
+		msg, ok := <-state.messagesCh
+		if !ok {
+			log.Info().Msg("exiting process message loop")
+			return
+		}
+		processTopicMessage(state, msg)
+
+		n := len(state.messagesCh)
+		for i := 0; i < n; i++ {
+			msg, ok = <-state.messagesCh
 			if !ok {
 				log.Info().Msg("exiting process message loop")
 				return
 			}
 			processTopicMessage(state, msg)
-			n := len(state.messagesCh)
-			for i := 0; i < n; i++ {
-				msg = <-state.messagesCh
-				processTopicMessage(state, msg)
-			}
-		case <-state.stop:
-			log.Debug().Msg("hard stop signal")
-			return
-		}
-
-		// NOTE: I'm using this for testing only, but if it makes sense to fully support it
-		// we may want to add a timeout (with a timer), otherwise this will executed only
-		// if the previous select exited
-		if state.softStop {
-			log.Debug().Msg("soft stop signal")
-			return
 		}
 	}
 }
@@ -355,47 +334,68 @@ func Process(state *State) {
 
 	for {
 		select {
-		case alias := <-state.connectCh:
+		case alias, ok := <-state.connectCh:
+			if !ok {
+				log.Info().Msg("exiting process loop")
+				return
+			}
 			ignoreError(processConnect(state, alias))
 			n := len(state.connectCh)
 			for i := 0; i < n; i++ {
-				alias := <-state.connectCh
+				alias, ok := <-state.connectCh
+				if !ok {
+					log.Info().Msg("exiting process loop")
+					return
+				}
 				ignoreError(processConnect(state, alias))
 			}
-		case change := <-state.topicCh:
+		case change, ok := <-state.topicCh:
+			if !ok {
+				log.Info().Msg("exiting process loop")
+				return
+			}
 			ignoreError(processSubscriptionChange(state, change))
 			n := len(state.topicCh)
 			for i := 0; i < n; i++ {
-				change := <-state.topicCh
+				change, ok := <-state.topicCh
+				if !ok {
+					log.Info().Msg("exiting process loop")
+					return
+				}
 				ignoreError(processSubscriptionChange(state, change))
 			}
-		case p := <-state.unregisterCh:
+		case p, ok := <-state.unregisterCh:
+			if !ok {
+				log.Info().Msg("exiting process loop")
+				return
+			}
 			ignoreError(processUnregister(state, p))
 			n := len(state.unregisterCh)
 			for i := 0; i < n; i++ {
-				p = <-state.unregisterCh
+				p, ok = <-state.unregisterCh
+				if !ok {
+					log.Info().Msg("exiting process loop")
+					return
+				}
 				ignoreError(processUnregister(state, p))
 			}
-		case webRtcMessage := <-state.webRtcControlCh:
+		case webRtcMessage, ok := <-state.webRtcControlCh:
+			if !ok {
+				log.Info().Msg("exiting process loop")
+				return
+			}
 			ignoreError(processWebRtcControlMessage(state, webRtcMessage))
 			n := len(state.webRtcControlCh)
 			for i := 0; i < n; i++ {
-				webRtcMessage = <-state.webRtcControlCh
+				webRtcMessage, ok = <-state.webRtcControlCh
+				if !ok {
+					log.Info().Msg("exiting process loop")
+					return
+				}
 				ignoreError(processWebRtcControlMessage(state, webRtcMessage))
 			}
 		case <-ticker.C:
 			report(state)
-		case <-state.stop:
-			log.Debug().Msg("hard stop signal")
-			return
-		}
-
-		// NOTE: I'm using this for testing only, but if it makes sense to fully support it
-		// we may want to add a timeout (with a timer), otherwise this will executed only
-		// if the previous select exited
-		if state.softStop {
-			log.Debug().Msg("soft stop signal")
-			return
 		}
 	}
 }

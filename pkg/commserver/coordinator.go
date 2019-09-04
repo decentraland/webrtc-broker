@@ -1,6 +1,7 @@
 package commserver
 
 import (
+	"errors"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -21,6 +22,7 @@ type coordinator struct {
 	conn        ws.IWebsocket
 	send        chan []byte
 	exitOnClose bool
+	closed      bool
 }
 
 func (c *coordinator) Connect(state *State) error {
@@ -44,6 +46,9 @@ func (c *coordinator) Connect(state *State) error {
 
 func (c *coordinator) Send(state *State, msg protocol.Message) error {
 	log := c.log
+	if c.closed {
+		return errors.New("coordinator connection is closed")
+	}
 	bytes, err := state.services.Marshaller.Marshal(msg)
 	if err != nil {
 		log.Error().Err(err).Msg("encode message failure")
@@ -57,7 +62,6 @@ func (c *coordinator) Send(state *State, msg protocol.Message) error {
 func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.WelcomeMessage) {
 	defer func() {
 		c.Close()
-		state.stop <- true
 	}()
 
 	log := c.log
@@ -175,6 +179,10 @@ func (c *coordinator) writePump(_ *State) {
 }
 
 func (c *coordinator) Close() {
+	if c.closed {
+		return
+	}
+	c.closed = true
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
 			c.log.Debug().Err(err).Msg("error closing coordinator")

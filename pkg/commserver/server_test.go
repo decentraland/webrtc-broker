@@ -254,7 +254,6 @@ func TestCoordinatorReadPump(t *testing.T) {
 		go state.coordinator.readPump(state, welcomeChannel)
 
 		welcomeMessage := <-welcomeChannel
-		<-state.stop
 
 		require.Equal(t, uint64(3), welcomeMessage.Alias)
 	})
@@ -279,7 +278,8 @@ func TestCoordinatorReadPump(t *testing.T) {
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
-		<-state.stop
+		<-state.coordinator.send
+
 		require.Len(t, state.webRtcControlCh, 1)
 	})
 
@@ -304,7 +304,8 @@ func TestCoordinatorReadPump(t *testing.T) {
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
-		<-state.stop
+		<-state.coordinator.send
+
 		require.Len(t, state.connectCh, 1)
 		require.Equal(t, uint64(2), <-state.connectCh)
 	})
@@ -532,7 +533,6 @@ func TestInitPeer(t *testing.T) {
 			On("close", conn).Return(errors.New("already closed"))
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
@@ -556,7 +556,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -599,7 +598,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -644,7 +642,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -689,7 +686,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
@@ -739,7 +735,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
@@ -1063,13 +1058,12 @@ func TestProcessConnect(t *testing.T) {
 			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
 		config := makeTestConfigWithWebRtc(nil, webRtc)
-
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		state.connectCh <- 1
 		state.connectCh <- 2
-		state.softStop = true
+
+		close(state.connectCh)
 
 		Process(state)
 
@@ -1097,9 +1091,8 @@ func TestProcessConnect(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 		state.connectCh <- 1
-		state.softStop = true
+		close(state.connectCh)
 
 		Process(state)
 
@@ -1126,7 +1119,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("add topic from clients", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
 		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
@@ -1146,7 +1138,7 @@ func TestProcessSubscriptionChange(t *testing.T) {
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte("topic1"),
 		}
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1167,7 +1159,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("server to server, but second server is not subscribed", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		s1 := setupPeer(state, 1, protocol.Role_COMMUNICATION_SERVER)
 		s2 := setupPeer(state, 2, protocol.Role_COMMUNICATION_SERVER)
@@ -1179,7 +1170,7 @@ func TestProcessSubscriptionChange(t *testing.T) {
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte("topic1"),
 		}
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1196,7 +1187,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("remove topic from clients", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
 		c1.topics["topic1"] = struct{}{}
@@ -1222,8 +1212,7 @@ func TestProcessSubscriptionChange(t *testing.T) {
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte(""),
 		}
-
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1238,7 +1227,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 func TestUnregister(t *testing.T) {
 	config := makeTestConfig()
 	state := makeTestState(t, config)
-	defer closeState(state)
 
 	p := addPeer(state, makeClient(1, state.services))
 	p.topics["topic1"] = struct{}{}
@@ -1251,7 +1239,7 @@ func TestUnregister(t *testing.T) {
 
 	state.unregisterCh <- p
 	state.unregisterCh <- p2
-	state.softStop = true
+	close(state.unregisterCh)
 
 	Process(state)
 
@@ -1281,7 +1269,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		data, err := json.Marshal(offer)
 		require.NoError(t, err)
@@ -1291,8 +1278,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			Data:      data,
 			FromAlias: 1,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1315,7 +1301,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p := addPeer(state, makeClient(1, state.services))
 		p2 := addPeer(state, makeClient(2, state.services))
@@ -1334,8 +1319,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			Data:      data,
 			FromAlias: p2.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1357,7 +1341,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
 		data, err := json.Marshal(offer)
@@ -1368,8 +1351,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1389,7 +1371,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
 		data, err := json.Marshal(answer)
@@ -1400,8 +1381,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1416,7 +1396,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p := addPeer(state, makeClient(1, state.services))
 
@@ -1427,8 +1406,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1471,7 +1449,6 @@ func TestProcessTopicMessage(t *testing.T) {
 			On("isClosed", p4.conn).Return(true).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p1.services = state.services
 		p2.services = state.services
@@ -1488,8 +1465,7 @@ func TestProcessTopicMessage(t *testing.T) {
 			topic:    "topic1",
 			from:     p1,
 		}
-
-		state.softStop = true
+		close(state.messagesCh)
 
 		ProcessMessagesQueue(state)
 
@@ -1522,7 +1498,6 @@ func TestProcessTopicMessage(t *testing.T) {
 			On("isClosed", p2.conn).Return(false).Twice()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p1.services = state.services
 		p2.services = state.services
@@ -1542,8 +1517,7 @@ func TestProcessTopicMessage(t *testing.T) {
 			topic:    "topic1",
 			from:     p1,
 		}
-
-		state.softStop = true
+		close(state.messagesCh)
 
 		ProcessMessagesQueue(state)
 
@@ -1557,7 +1531,6 @@ func BenchmarkProcessSubscriptionChange(b *testing.B) {
 
 	state, err := MakeState(&config)
 	require.NoError(b, err)
-	defer closeState(state)
 
 	s1 := addPeer(state, makeClient(1, state.services))
 	c1 := addPeer(state, makeClient(2, state.services))
