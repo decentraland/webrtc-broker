@@ -38,6 +38,7 @@ type PeerStats struct {
 	ReliableBytesReceived    uint64
 	ReliableMessagesSent     uint32
 	ReliableMessagesReceived uint32
+	ReliableBufferedAmount   uint64
 
 	UnreliableProtocol         string
 	UnreliableState            DataChannelState
@@ -45,6 +46,7 @@ type PeerStats struct {
 	UnreliableBytesReceived    uint64
 	UnreliableMessagesSent     uint32
 	UnreliableMessagesReceived uint32
+	UnreliableBufferedAmount   uint64
 
 	ICETransportBytesSent     uint64
 	ICETransportBytesReceived uint64
@@ -110,6 +112,14 @@ func report(state *State) {
 			Identity:   p.GetIdentity(),
 			TopicCount: uint32(len(p.topics)),
 			State:      p.conn.ICEConnectionState(),
+		}
+
+		if p.reliableDC != nil {
+			stats.ReliableBufferedAmount = p.reliableDC.BufferedAmount()
+		}
+
+		if p.unreliableDC != nil {
+			stats.UnreliableBufferedAmount = p.unreliableDC.BufferedAmount()
 		}
 
 		connStats, ok := report.GetConnectionStats(p.conn)

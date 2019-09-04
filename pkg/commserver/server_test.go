@@ -1444,9 +1444,6 @@ func TestProcessTopicMessage(t *testing.T) {
 		}
 
 		webRtc := &mockWebRtc{}
-		webRtc.
-			On("isClosed", p2.conn).Return(false).Once().
-			On("isClosed", p4.conn).Return(true).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
 
@@ -1494,8 +1491,6 @@ func TestProcessTopicMessage(t *testing.T) {
 		}
 
 		webRtc := &mockWebRtc{}
-		webRtc.
-			On("isClosed", p2.conn).Return(false).Twice()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
 

@@ -321,6 +321,7 @@ func ProcessMessagesQueue(state *State) {
 
 // Process start the peer processor
 func Process(state *State) {
+
 	log := state.services.Log
 
 	ticker := time.NewTicker(state.reportPeriod)
@@ -398,6 +399,23 @@ func Process(state *State) {
 			report(state)
 		}
 	}
+}
+
+// Shutdown ...
+func Shutdown(state *State) {
+	state.coordinator.Close()
+	close(state.webRtcControlCh)
+	close(state.connectCh)
+
+	for _, p := range state.peers {
+		p.Close()
+	}
+
+	// NOTE(hugo): we cannot close this channels because they are
+	// shared with peers, we would need to wait for peers to be unnregistered first
+	// close(state.unregisterCh)
+	// close(state.topicCh)
+	// close(state.messagesCh)
 }
 
 func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
@@ -872,7 +890,7 @@ func processTopicMessage(state *State, msg *peerMessage) {
 	}
 
 	for _, p := range subscription.clients {
-		if p == msg.from || p.IsClosed() {
+		if p == msg.from {
 			continue
 		}
 
