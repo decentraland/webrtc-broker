@@ -8,19 +8,20 @@ import (
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	"github.com/decentraland/webrtc-broker/pkg/commserver"
-	"github.com/sirupsen/logrus"
+
+	"github.com/rs/zerolog"
 
 	_ "net/http/pprof"
 )
 
 func main() {
-	log := logrus.New()
-	defer logging.LogPanic()
+	log := logging.New().Level(zerolog.DebugLevel)
+	defer logging.LogPanic(log)
 
 	auth := authentication.NoopAuthenticator{}
 	config := commserver.Config{
 		Auth: &auth,
-		Log:  log,
+		Log:  &log,
 		ICEServers: []commserver.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
@@ -36,22 +37,21 @@ func main() {
 	if *profilerPort != -1 {
 		go func() {
 			addr := fmt.Sprintf("localhost:%d", *profilerPort)
-			log.Info("Starting profiler at ", addr)
-			log.Debug(http.ListenAndServe(addr, nil))
+			log.Info().Msgf("Starting profiler at %s", addr)
+			log.Debug().Err(http.ListenAndServe(addr, nil))
 		}()
 	}
 
-	config.CoordinatorURL = fmt.Sprintf("%s/discover", config.CoordinatorURL)
 	state, err := commserver.MakeState(&config)
 
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 
-	log.Info("starting communication server node")
+	log.Info().Msg("starting communication server node")
 
 	if err := commserver.ConnectCoordinator(state); err != nil {
-		log.Fatal("connect coordinator failure ", err)
+		log.Fatal().Err(err).Msg("connect coordinator failure")
 	}
 
 	go commserver.ProcessMessagesQueue(state)

@@ -10,11 +10,11 @@ import (
 	pion "github.com/pion/webrtc/v2"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/decentraland/webrtc-broker/internal/logging"
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,19 +145,17 @@ func makeTestServices(webRtc *mockWebRtc) services {
 	s := services{
 		Marshaller: &protocol.Marshaller{},
 		WebRtc:     webRtc,
-		Log:        logrus.New(),
+		Log:        logging.New(),
 		Zipper:     &GzipCompression{},
 	}
 	return s
 }
 
 func makeTestConfigWithWebRtc(auth authentication.ServerAuthenticator, webRtc *mockWebRtc) *Config {
-	logger := logrus.New()
 	config := &Config{
 		Auth:                    auth,
 		EstablishSessionTimeout: 1 * time.Second,
 		WebRtc:                  webRtc,
-		Log:                     logger,
 	}
 
 	return config
@@ -201,7 +199,7 @@ func addPeer(state *State, p *peer) *peer {
 func TestCoordinatorSend(t *testing.T) {
 	config := makeTestConfig()
 	state := makeTestState(t, config)
-	c := coordinator{send: make(chan []byte, 256), log: logrus.New()}
+	c := coordinator{send: make(chan []byte, 256), log: logging.New()}
 	defer c.Close()
 
 	msg1 := &protocol.PingMessage{}
@@ -256,7 +254,6 @@ func TestCoordinatorReadPump(t *testing.T) {
 		go state.coordinator.readPump(state, welcomeChannel)
 
 		welcomeMessage := <-welcomeChannel
-		<-state.stop
 
 		require.Equal(t, uint64(3), welcomeMessage.Alias)
 	})
@@ -281,8 +278,9 @@ func TestCoordinatorReadPump(t *testing.T) {
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
-		<-state.stop
-		require.Len(t, state.webRtcControlQueue, 1)
+		<-state.coordinator.send
+
+		require.Len(t, state.webRtcControlCh, 1)
 	})
 
 	t.Run("connect message", func(t *testing.T) {
@@ -306,9 +304,10 @@ func TestCoordinatorReadPump(t *testing.T) {
 		welcomeChannel := make(chan *protocol.WelcomeMessage)
 		go state.coordinator.readPump(state, welcomeChannel)
 
-		<-state.stop
-		require.Len(t, state.connectQueue, 1)
-		require.Equal(t, uint64(2), <-state.connectQueue)
+		<-state.coordinator.send
+
+		require.Len(t, state.connectCh, 1)
+		require.Equal(t, uint64(2), <-state.connectCh)
 	})
 }
 
@@ -534,12 +533,11 @@ func TestInitPeer(t *testing.T) {
 			On("close", conn).Return(errors.New("already closed"))
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		_, err := initPeer(state, 1, protocol.Role_UNKNOWN_ROLE)
 		require.NoError(t, err)
 
-		p := <-state.unregisterQueue
+		p := <-state.unregisterCh
 		require.Equal(t, uint64(1), p.alias)
 	})
 
@@ -558,7 +556,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -584,7 +581,7 @@ func TestInitPeer(t *testing.T) {
 
 		reliableOpenHandler()
 
-		<-state.unregisterQueue
+		<-state.unregisterCh
 	})
 
 	t.Run("auth exchange: invalid role received in auth message", func(t *testing.T) {
@@ -601,7 +598,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -628,7 +624,7 @@ func TestInitPeer(t *testing.T) {
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
-		<-state.unregisterQueue
+		<-state.unregisterCh
 	})
 
 	t.Run("auth exchange: invalid credentials received", func(t *testing.T) {
@@ -646,7 +642,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		conn := newConnection(t)
@@ -673,7 +668,7 @@ func TestInitPeer(t *testing.T) {
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
-		<-state.unregisterQueue
+		<-state.unregisterCh
 	})
 
 	t.Run("auth exchange: valid credentials are received from a client", func(t *testing.T) {
@@ -691,7 +686,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
@@ -722,7 +716,7 @@ func TestInitPeer(t *testing.T) {
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
-		<-state.unregisterQueue
+		<-state.unregisterCh
 		require.Equal(t, protocol.Role_CLIENT, p.role)
 	})
 
@@ -741,7 +735,6 @@ func TestInitPeer(t *testing.T) {
 		})
 
 		state := makeTestState(test.t, config)
-		defer closeState(state)
 
 		var reliableOpenHandler func()
 		var unreliableOpenHandler func()
@@ -772,7 +765,7 @@ func TestInitPeer(t *testing.T) {
 		reliableOpenHandler()
 
 		// NOTE: called by peer.Close() on read error
-		<-state.unregisterQueue
+		<-state.unregisterCh
 		require.Equal(t, protocol.Role_COMMUNICATION_SERVER, p.role)
 	})
 
@@ -819,7 +812,7 @@ func TestInitPeer(t *testing.T) {
 		go unreliableOpenHandler()
 		reliableOpenHandler()
 
-		<-state.unregisterQueue
+		<-state.unregisterCh
 		auth.AssertExpectations(t)
 	})
 }
@@ -831,9 +824,9 @@ func TestReadReliablePump(t *testing.T) {
 
 		ss := makeTestServices(makeDefaultMockWebRtc())
 		p := makeClient(alias, ss)
-		p.messagesQueue = make(chan *peerMessage, 255)
-		p.topicQueue = make(chan topicChange, 255)
-		p.unregisterQueue = make(chan *peer, 255)
+		p.messagesCh = make(chan *peerMessage, 255)
+		p.topicCh = make(chan topicChange, 255)
+		p.unregisterCh = make(chan *peer, 255)
 		reliableRWC := mockReadWriteCloser{}
 		p.reliableRWC = &reliableRWC
 
@@ -857,8 +850,8 @@ func TestReadReliablePump(t *testing.T) {
 		p := setupPeer(t, 1, msg)
 		p.readReliablePump()
 
-		require.Len(t, p.topicQueue, 1)
-		change := <-p.topicQueue
+		require.Len(t, p.topicCh, 1)
+		change := <-p.topicCh
 		require.Equal(t, uint64(1), change.peer.alias)
 		require.Equal(t, change.rawTopics, msg.Topics)
 	})
@@ -873,8 +866,8 @@ func TestReadReliablePump(t *testing.T) {
 		p := setupPeer(t, 1, msg)
 		p.readReliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 
@@ -901,8 +894,8 @@ func TestReadReliablePump(t *testing.T) {
 		p.role = protocol.Role_COMMUNICATION_SERVER
 		p.readReliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 
@@ -924,8 +917,8 @@ func TestReadReliablePump(t *testing.T) {
 		p := setupPeer(t, 1, msg)
 		p.readReliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 
@@ -955,8 +948,8 @@ func TestReadReliablePump(t *testing.T) {
 		p.role = protocol.Role_COMMUNICATION_SERVER
 		p.readReliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 
@@ -974,9 +967,9 @@ func TestReadUnreliablePump(t *testing.T) {
 	setup := func(t *testing.T, alias uint64, msg proto.Message, webRtc *mockWebRtc) *peer {
 		ss := makeTestServices(webRtc)
 		p := makeClient(alias, ss)
-		p.messagesQueue = make(chan *peerMessage, 255)
-		p.topicQueue = make(chan topicChange, 255)
-		p.unregisterQueue = make(chan *peer, 255)
+		p.messagesCh = make(chan *peerMessage, 255)
+		p.topicCh = make(chan topicChange, 255)
+		p.unregisterCh = make(chan *peer, 255)
 
 		encodedMsg, err := proto.Marshal(msg)
 		require.NoError(t, err)
@@ -1003,7 +996,7 @@ func TestReadUnreliablePump(t *testing.T) {
 		p := setup(t, 1, msg, webRtc)
 		p.readUnreliablePump()
 
-		require.Len(t, p.topicQueue, 0)
+		require.Len(t, p.topicCh, 0)
 		webRtc.AssertExpectations(t)
 	})
 
@@ -1018,8 +1011,8 @@ func TestReadUnreliablePump(t *testing.T) {
 		p := setup(t, 1, msg, webRtc)
 		p.readUnreliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 		webRtc.AssertExpectations(t)
@@ -1036,8 +1029,8 @@ func TestReadUnreliablePump(t *testing.T) {
 		p := setup(t, 1, msg, webRtc)
 		p.readUnreliablePump()
 
-		require.Len(t, p.messagesQueue, 1)
-		peerMessage := <-p.messagesQueue
+		require.Len(t, p.messagesCh, 1)
+		peerMessage := <-p.messagesCh
 		require.Equal(t, peerMessage.from, p)
 		require.Equal(t, "topic1", peerMessage.topic)
 		webRtc.AssertExpectations(t)
@@ -1065,19 +1058,18 @@ func TestProcessConnect(t *testing.T) {
 			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything)
 		config := makeTestConfigWithWebRtc(nil, webRtc)
-
 		state := makeTestState(t, config)
-		defer closeState(state)
 
-		state.connectQueue <- 1
-		state.connectQueue <- 2
-		state.softStop = true
+		state.connectCh <- 1
+		state.connectCh <- 2
+
+		close(state.connectCh)
 
 		Process(state)
 
 		// NOTE: eventually connections will be closed because establish timeout
-		<-state.unregisterQueue
-		<-state.unregisterQueue
+		<-state.unregisterCh
+		<-state.unregisterCh
 
 		require.Len(t, state.coordinator.send, 2)
 		webRtc.AssertExpectations(t)
@@ -1099,14 +1091,13 @@ func TestProcessConnect(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
-		state.connectQueue <- 1
-		state.softStop = true
+		state.connectCh <- 1
+		close(state.connectCh)
 
 		Process(state)
 
 		// NOTE: eventually connection will be closed because establish timeout
-		<-state.unregisterQueue
+		<-state.unregisterCh
 
 		require.Len(t, state.coordinator.send, 0)
 		webRtc.AssertExpectations(t)
@@ -1128,7 +1119,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("add topic from clients", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
 		c2 := setupPeer(state, 2, protocol.Role_CLIENT)
@@ -1138,17 +1128,17 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		s1.reliableRWC = &s1ReliableRWC
 		s1ReliableRWC.On("Write", mock.Anything).Return(0, nil)
 
-		state.topicQueue <- topicChange{
+		state.topicCh <- topicChange{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte("topic1"),
 		}
-		state.topicQueue <- topicChange{
+		state.topicCh <- topicChange{
 			peer:      c2,
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte("topic1"),
 		}
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1169,19 +1159,18 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("server to server, but second server is not subscribed", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		s1 := setupPeer(state, 1, protocol.Role_COMMUNICATION_SERVER)
 		s2 := setupPeer(state, 2, protocol.Role_COMMUNICATION_SERVER)
 		s2ReliableRWC := mockReadWriteCloser{}
 		s2.reliableRWC = &s2ReliableRWC
 
-		state.topicQueue <- topicChange{
+		state.topicCh <- topicChange{
 			peer:      s1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte("topic1"),
 		}
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1198,7 +1187,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 	t.Run("remove topic from clients", func(t *testing.T) {
 		config := makeTestConfig()
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
 		c1.topics["topic1"] = struct{}{}
@@ -1213,19 +1201,18 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		state.subscriptions.AddClientSubscription("topic1", c1)
 		state.subscriptions.AddClientSubscription("topic1", c2)
 
-		state.topicQueue <- topicChange{
+		state.topicCh <- topicChange{
 			peer:      c1,
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte(""),
 		}
 
-		state.topicQueue <- topicChange{
+		state.topicCh <- topicChange{
 			peer:      c2,
 			format:    protocol.Format_PLAIN,
 			rawTopics: []byte(""),
 		}
-
-		state.softStop = true
+		close(state.topicCh)
 
 		Process(state)
 
@@ -1240,7 +1227,6 @@ func TestProcessSubscriptionChange(t *testing.T) {
 func TestUnregister(t *testing.T) {
 	config := makeTestConfig()
 	state := makeTestState(t, config)
-	defer closeState(state)
 
 	p := addPeer(state, makeClient(1, state.services))
 	p.topics["topic1"] = struct{}{}
@@ -1251,9 +1237,9 @@ func TestUnregister(t *testing.T) {
 	state.subscriptions.AddClientSubscription("topic1", p)
 	state.subscriptions.AddClientSubscription("topic1", p2)
 
-	state.unregisterQueue <- p
-	state.unregisterQueue <- p2
-	state.softStop = true
+	state.unregisterCh <- p
+	state.unregisterCh <- p2
+	close(state.unregisterCh)
 
 	Process(state)
 
@@ -1283,23 +1269,21 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		data, err := json.Marshal(offer)
 		require.NoError(t, err)
 
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Data:      data,
 			FromAlias: 1,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
 		// NOTE: eventually connection will be closed because establish timeout
-		<-state.unregisterQueue
+		<-state.unregisterCh
 
 		require.Len(t, state.coordinator.send, 1)
 		webRtc.AssertExpectations(t)
@@ -1317,7 +1301,6 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p := addPeer(state, makeClient(1, state.services))
 		p2 := addPeer(state, makeClient(2, state.services))
@@ -1325,19 +1308,18 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		data, err := json.Marshal(offer)
 		require.NoError(t, err)
 
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Data:      data,
 			FromAlias: p.alias,
 		}
 
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Data:      data,
 			FromAlias: p2.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1359,19 +1341,17 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
 		data, err := json.Marshal(offer)
 		require.NoError(t, err)
 
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_OFFER,
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1391,19 +1371,17 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 		p := addPeer(state, makeClient(1, state.services))
 
 		data, err := json.Marshal(answer)
 		require.NoError(t, err)
 
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ANSWER,
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1418,19 +1396,17 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p := addPeer(state, makeClient(1, state.services))
 
 		data, err := json.Marshal(candidate)
 		require.NoError(t, err)
-		state.webRtcControlQueue <- &protocol.WebRtcMessage{
+		state.webRtcControlCh <- &protocol.WebRtcMessage{
 			Type:      protocol.MessageType_WEBRTC_ICE_CANDIDATE,
 			Data:      data,
 			FromAlias: p.alias,
 		}
-
-		state.softStop = true
+		close(state.webRtcControlCh)
 
 		Process(state)
 
@@ -1473,7 +1449,6 @@ func TestProcessTopicMessage(t *testing.T) {
 			On("isClosed", p4.conn).Return(true).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p1.services = state.services
 		p2.services = state.services
@@ -1485,13 +1460,12 @@ func TestProcessTopicMessage(t *testing.T) {
 		state.subscriptions.AddClientSubscription("topic1", p2)
 		state.subscriptions.AddClientSubscription("topic1", p4)
 
-		state.messagesQueue <- &peerMessage{
+		state.messagesCh <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
 			from:     p1,
 		}
-
-		state.softStop = true
+		close(state.messagesCh)
 
 		ProcessMessagesQueue(state)
 
@@ -1524,7 +1498,6 @@ func TestProcessTopicMessage(t *testing.T) {
 			On("isClosed", p2.conn).Return(false).Twice()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
-		defer closeState(state)
 
 		p1.services = state.services
 		p2.services = state.services
@@ -1533,19 +1506,18 @@ func TestProcessTopicMessage(t *testing.T) {
 		state.subscriptions.AddClientSubscription("topic1", p1)
 		state.subscriptions.AddClientSubscription("topic1", p2)
 
-		state.messagesQueue <- &peerMessage{
+		state.messagesCh <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
 			from:     p1,
 		}
 
-		state.messagesQueue <- &peerMessage{
+		state.messagesCh <- &peerMessage{
 			reliable: true,
 			topic:    "topic1",
 			from:     p1,
 		}
-
-		state.softStop = true
+		close(state.messagesCh)
 
 		ProcessMessagesQueue(state)
 
@@ -1559,7 +1531,6 @@ func BenchmarkProcessSubscriptionChange(b *testing.B) {
 
 	state, err := MakeState(&config)
 	require.NoError(b, err)
-	defer closeState(state)
 
 	s1 := addPeer(state, makeClient(1, state.services))
 	c1 := addPeer(state, makeClient(2, state.services))

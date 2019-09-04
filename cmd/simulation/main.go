@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("coordinatorURL", "ws://localhost:9090/connect", "Coordinator URL")
+	addr := flag.String("coordinatorURL", "ws://localhost:9090", "Coordinator URL")
 	nBots := flag.Int("n", 1, "number of bots")
 	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
 	trackStats := flag.Bool("trackStats", false, "")

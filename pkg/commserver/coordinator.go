@@ -1,6 +1,7 @@
 package commserver
 
 import (
+	"errors"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -16,27 +17,25 @@ const (
 )
 
 type coordinator struct {
-	log         *logging.Logger
+	log         logging.Logger
 	url         string
 	conn        ws.IWebsocket
 	send        chan []byte
 	exitOnClose bool
+	closed      bool
 }
 
 func (c *coordinator) Connect(state *State) error {
 	url, err := state.services.Auth.GenerateServerConnectURL(c.url)
 	if err != nil {
-		c.log.WithError(err).Error("error generating communication server auth url")
+		c.log.Error().Err(err).Msg("error generating communication server auth url")
 		return err
 	}
 
 	conn, err := ws.Dial(url)
 
 	if err != nil {
-		c.log.WithFields(logging.Fields{
-			"url":   c.url,
-			"error": err,
-		}).Error("cannot connect to coordinator node")
+		c.log.Error().Str("url", c.url).Err(err).Msg("cannot connect to coordinator node")
 		return err
 	}
 
@@ -47,9 +46,12 @@ func (c *coordinator) Connect(state *State) error {
 
 func (c *coordinator) Send(state *State, msg protocol.Message) error {
 	log := c.log
+	if c.closed {
+		return errors.New("coordinator connection is closed")
+	}
 	bytes, err := state.services.Marshaller.Marshal(msg)
 	if err != nil {
-		log.WithError(err).Error("encode message failure")
+		log.Error().Err(err).Msg("encode message failure")
 		return err
 	}
 
@@ -60,14 +62,13 @@ func (c *coordinator) Send(state *State, msg protocol.Message) error {
 func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.WelcomeMessage) {
 	defer func() {
 		c.Close()
-		state.stop <- true
 	}()
 
 	log := c.log
 	marshaller := state.services.Marshaller
 	c.conn.SetReadLimit(maxCoordinatorMessageSize)
 	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
-		log.WithError(err).Error("Cannot set read deadline")
+		log.Error().Err(err).Msg("Cannot set read deadline")
 		return
 	}
 	c.conn.SetPongHandler(func(s string) error {
@@ -79,15 +80,15 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 		bytes, err := c.conn.ReadMessage()
 		if err != nil {
 			if ws.IsUnexpectedCloseError(err) {
-				log.WithError(err).Error("unexcepted close error")
+				log.Error().Err(err).Msg("unexcepted close error")
 			} else {
-				log.WithError(err).Error("read error")
+				log.Error().Err(err).Msg("read error")
 			}
 			break
 		}
 
 		if err := marshaller.Unmarshal(bytes, header); err != nil {
-			log.WithError(err).Debug("decode header failure")
+			log.Debug().Err(err).Msg("decode header failure")
 			continue
 		}
 
@@ -97,29 +98,29 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 		case protocol.MessageType_WELCOME:
 			welcomeMessage := &protocol.WelcomeMessage{}
 			if err := marshaller.Unmarshal(bytes, welcomeMessage); err != nil {
-				log.WithError(err).Error("decode welcome message failure")
+				log.Error().Err(err).Msg("decode welcome message failure")
 				return
 			}
 
-			log.Info("my alias is ", welcomeMessage.Alias)
+			log.Info().Uint64("alias", welcomeMessage.Alias).Msg("welcome message alias")
 			welcomeChannel <- welcomeMessage
 		case protocol.MessageType_WEBRTC_OFFER, protocol.MessageType_WEBRTC_ANSWER, protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
 			if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {
-				log.WithError(err).Debug("decode webrtc message failure")
+				log.Debug().Err(err).Msg("decode webrtc message failure")
 				continue
 			}
-			state.webRtcControlQueue <- webRtcMessage
+			state.webRtcControlCh <- webRtcMessage
 		case protocol.MessageType_CONNECT:
 			connectMessage := &protocol.ConnectMessage{}
 			if err := marshaller.Unmarshal(bytes, connectMessage); err != nil {
-				log.WithError(err).Debug("decode connect message failure")
+				log.Debug().Err(err).Msg("decode connect message failure")
 				continue
 			}
-			log.WithFields(logging.Fields{"to": connectMessage.FromAlias}).Debug("Connect message received XXXX")
-			state.connectQueue <- connectMessage.FromAlias
+			log.Debug().Uint64("to", connectMessage.FromAlias).Msg("Connect message received XXX")
+			state.connectCh <- connectMessage.FromAlias
 		default:
-			log.WithField("type", msgType).Debug("unhandled message from coordinator")
+			log.Debug().Str("type", msgType.String()).Msg("unhandled message from coordinator")
 		}
 	}
 }
@@ -130,7 +131,7 @@ func (c *coordinator) writePump(_ *State) {
 	defer func() {
 		ticker.Stop()
 		if err := c.conn.Close(); err != nil {
-			log.WithError(err).Debug("error closing connection on writePump exit")
+			log.Debug().Err(err).Msg("error closing connection on writePump exit")
 		}
 	}()
 
@@ -138,20 +139,20 @@ func (c *coordinator) writePump(_ *State) {
 		select {
 		case bytes, ok := <-c.send:
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.WithError(err).Error("error setting write deadline")
+				log.Error().Err(err).Msg("error setting write deadline")
 				return
 			}
 
 			if !ok {
 				if err := c.conn.WriteCloseMessage(); err != nil {
-					log.WithError(err).Debug("error sending write close message")
+					log.Debug().Err(err).Msg("error sending write close message")
 				}
-				log.Info("channel closed")
+				log.Info().Msg("channel closed")
 				return
 			}
 
 			if err := c.conn.WriteMessage(bytes); err != nil {
-				log.WithError(err).Error("error writing message")
+				log.Error().Err(err).Msg("error writing message")
 				return
 			}
 
@@ -159,18 +160,18 @@ func (c *coordinator) writePump(_ *State) {
 			for i := 0; i < n; i++ {
 				bytes = <-c.send
 				if err := c.conn.WriteMessage(bytes); err != nil {
-					log.WithError(err).Error("error writing message")
+					log.Error().Err(err).Msg("error writing message")
 					return
 				}
 			}
 		case <-ticker.C:
 			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.WithError(err).Error("error setting write deadline")
+				log.Error().Err(err).Msg("error setting write deadline")
 				return
 			}
 
 			if err := c.conn.WritePingMessage(); err != nil {
-				log.WithError(err).Error("error writing ping message")
+				log.Error().Err(err).Msg("error writing ping message")
 				return
 			}
 		}
@@ -178,15 +179,19 @@ func (c *coordinator) writePump(_ *State) {
 }
 
 func (c *coordinator) Close() {
+	if c.closed {
+		return
+	}
+	c.closed = true
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
-			c.log.WithError(err).Debug("error closing coordinator")
+			c.log.Debug().Err(err).Msg("error closing coordinator")
 		}
 	}
 	close(c.send)
 
 	if c.exitOnClose {
 		// TODO reconnect with circuit breaker instead
-		c.log.Fatal("Coordinator connection closed, exiting process")
+		c.log.Fatal().Msg("Coordinator connection closed, exiting process")
 	}
 }

@@ -1,57 +1,56 @@
 package logging
 
 import (
+	"os"
 	"runtime/debug"
 
 	pionlogging "github.com/pion/logging"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 )
 
-// Logger is an alias for logrus.Logger
-type Logger = logrus.Logger
+// Logger ...
+type Logger = zerolog.Logger
 
-// Entry is an alias for logrus.Entry
-type Entry = logrus.Entry
+// New creates a new Logger
+func New() Logger {
+	return zerolog.New(os.Stdout)
+}
 
-// Fields is an alias for logrus.Fields
-type Fields = logrus.Fields
-
-// LogPanic will catch a panic and log it using logrus default config
-func LogPanic() {
+// LogPanic will catch a panic and log it
+func LogPanic(log Logger) {
 	if r := recover(); r != nil {
 		err, ok := r.(error)
 		if ok {
 			debug.PrintStack()
-			logrus.WithError(err).Error("panic")
+			log.Error().Err(err).Msg("panic")
 		}
 	}
 }
 
-type logrusLevelLogger struct {
-	log       *Logger
-	peerAlias uint64
+type levelLogger struct {
+	log Logger
 }
 
-func (lll *logrusLevelLogger) Trace(msg string) { lll.log.WithField("peer", lll.peerAlias).Trace(msg) }
-func (lll *logrusLevelLogger) Error(msg string) { lll.log.WithField("peer", lll.peerAlias).Error(msg) }
-func (lll *logrusLevelLogger) Debug(msg string) { lll.log.WithField("peer", lll.peerAlias).Debug(msg) }
-func (lll *logrusLevelLogger) Info(msg string)  { lll.log.WithField("peer", lll.peerAlias).Info(msg) }
-func (lll *logrusLevelLogger) Warn(msg string)  { lll.log.WithField("peer", lll.peerAlias).Warn(msg) }
+func (ll *levelLogger) Trace(msg string) { ll.log.Debug().Msg(msg) }
+func (ll *levelLogger) Error(msg string) { ll.log.Error().Msg(msg) }
+func (ll *levelLogger) Debug(msg string) { ll.log.Debug().Msg(msg) }
+func (ll *levelLogger) Info(msg string)  { ll.log.Info().Msg(msg) }
+func (ll *levelLogger) Warn(msg string)  { ll.log.Warn().Msg(msg) }
 
-func (lll *logrusLevelLogger) Tracef(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Tracef(format, args...)
+func (ll *levelLogger) Tracef(format string, args ...interface{}) {
+	ll.log.Debug().Msgf(format, args...)
 }
-func (lll *logrusLevelLogger) Debugf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Debugf(format, args...)
+func (ll *levelLogger) Debugf(format string, args ...interface{}) {
+	ll.log.Debug().Msgf(format, args...)
 }
-func (lll *logrusLevelLogger) Infof(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Infof(format, args...)
+func (ll *levelLogger) Infof(format string, args ...interface{}) {
+	ll.log.Info().Msgf(format, args...)
 }
-func (lll *logrusLevelLogger) Warnf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Warnf(format, args...)
+func (ll *levelLogger) Warnf(format string, args ...interface{}) {
+	ll.log.Warn().Msgf(format, args...)
 }
-func (lll *logrusLevelLogger) Errorf(format string, args ...interface{}) {
-	lll.log.WithField("peer", lll.peerAlias).Errorf(format, args...)
+func (ll *levelLogger) Errorf(format string, args ...interface{}) {
+	ll.log.Error().Msgf(format, args...)
 }
 
 // PionLoggingFactory is the log factory expected by pion
@@ -61,7 +60,6 @@ type PionLoggingFactory struct {
 
 // NewLogger creates a new logger for the given scope
 func (f *PionLoggingFactory) NewLogger(scope string) pionlogging.LeveledLogger {
-	log := logrus.New()
-	log.SetLevel(logrus.ErrorLevel)
-	return &logrusLevelLogger{log: log, peerAlias: f.PeerAlias}
+	log := New().Level(zerolog.ErrorLevel).With().Uint64("peer", f.PeerAlias).Logger()
+	return &levelLogger{log: log}
 }

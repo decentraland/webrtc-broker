@@ -14,10 +14,10 @@ type peer struct {
 	topics map[string]struct{}
 	index  int
 
-	services        services
-	topicQueue      chan topicChange
-	messagesQueue   chan *peerMessage
-	unregisterQueue chan *peer
+	services     services
+	topicCh      chan topicChange
+	messagesCh   chan *peerMessage
+	unregisterCh chan *peer
 
 	reliableDC   *DataChannel
 	unreliableDC *DataChannel
@@ -28,9 +28,10 @@ type peer struct {
 	unreliableRWC    ReadWriteCloser
 	unreliableBuffer []byte
 
-	serverAlias uint64
-	conn        *PeerConnection
-	role        protocol.Role
+	conn *PeerConnection
+	role protocol.Role
+
+	log logging.Logger
 }
 
 func (p *peer) GetIdentity() []byte {
@@ -43,18 +44,6 @@ func (p *peer) GetIdentity() []byte {
 	return identity
 }
 
-func (p *peer) log() *logging.Entry {
-	return p.services.Log.
-		WithFields(logging.Fields{
-			"serverAlias": p.serverAlias,
-			"peer":        p.alias,
-		})
-}
-
-func (p *peer) logError(err error) *logging.Entry {
-	return p.log().WithError(err)
-}
-
 func (p *peer) IsClosed() bool {
 	return p.services.WebRtc.isClosed(p.conn)
 }
@@ -63,11 +52,11 @@ func (p *peer) Close() {
 	err := p.services.WebRtc.close(p.conn)
 
 	if err != nil {
-		p.logError(err).Warn("error closing connection")
+		p.log.Warn().Err(err).Msg("error closing connection")
 		return
 	}
 
-	p.unregisterQueue <- p
+	p.unregisterCh <- p
 }
 
 func (p *peer) readReliablePump() {
@@ -83,7 +72,7 @@ func (p *peer) readReliablePump() {
 		n, err := p.reliableRWC.Read(buffer)
 
 		if err != nil {
-			p.logError(err).Info("exit peer.readReliablePump(), datachannel closed")
+			p.log.Info().Err(err).Msg("exit peer.readReliablePump(), datachannel closed")
 			p.Close()
 			return
 		}
@@ -94,7 +83,7 @@ func (p *peer) readReliablePump() {
 
 		rawMsg := buffer[:n]
 		if err := marshaller.Unmarshal(rawMsg, &header); err != nil {
-			p.logError(err).Debug("decode header message failure")
+			p.log.Debug().Err(err).Msg("decode header message failure")
 			continue
 		}
 
@@ -105,11 +94,11 @@ func (p *peer) readReliablePump() {
 			p.log().WithField("type", msgType).Info("SUSCRIPTION")
 			topicSubscriptionMessage := &protocol.SubscriptionMessage{}
 			if err := marshaller.Unmarshal(rawMsg, topicSubscriptionMessage); err != nil {
-				p.logError(err).Debug("decode add topic message failure")
+				p.log.Debug().Err(err).Msg("decode add topic message failure")
 				continue
 			}
 
-			p.topicQueue <- topicChange{
+			p.topicCh <- topicChange{
 				peer:      p,
 				format:    topicSubscriptionMessage.Format,
 				rawTopics: topicSubscriptionMessage.Topics,
@@ -120,10 +109,10 @@ func (p *peer) readReliablePump() {
 			p.readTopicIdentityMessage(true, rawMsg)
 		case protocol.MessageType_PING:
 			if err := p.WriteReliable(rawMsg); err != nil {
-				p.logError(err).Debug("error writing ping messag")
+				p.log.Debug().Err(err).Msg("error writing ping messag")
 			}
 		default:
-			p.log().WithField("type", msgType).Debug("unhandled reliable message from peer")
+			p.log.Debug().Str("type", msgType.String()).Msg("unhandled reliable message from peer")
 		}
 	}
 }
@@ -142,7 +131,7 @@ func (p *peer) readUnreliablePump() {
 		n, err := p.unreliableRWC.Read(buffer)
 
 		if err != nil {
-			p.logError(err).Info("exit peer.readUnreliablePump(), datachannel closed")
+			p.log.Info().Err(err).Msg("exit peer.readUnreliablePump(), datachannel closed")
 			p.Close()
 			return
 		}
@@ -153,7 +142,7 @@ func (p *peer) readUnreliablePump() {
 
 		rawMsg := buffer[:n]
 		if err := marshaller.Unmarshal(rawMsg, &header); err != nil {
-			p.logError(err).Debug("decode header message failure")
+			p.log.Debug().Err(err).Msg("decode header message failure")
 			continue
 		}
 
@@ -166,10 +155,10 @@ func (p *peer) readUnreliablePump() {
 			p.readTopicIdentityMessage(false, rawMsg)
 		case protocol.MessageType_PING:
 			if err := p.WriteUnreliable(rawMsg); err != nil {
-				p.logError(err).Debug("error writing ping messag")
+				p.log.Debug().Err(err).Msg("error writing ping messag")
 			}
 		default:
-			p.log().WithField("type", msgType).Debug("unhandled unreliable message from peer")
+			p.log.Debug().Str("type", msgType.String()).Msg("unhandled unreliable message from peer")
 		}
 	}
 }
@@ -180,17 +169,16 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 	message := protocol.TopicMessage{}
 
 	if err := marshaller.Unmarshal(rawMsg, &message); err != nil {
-		p.logError(err).Debug("decode topic message failure")
+		p.log.Debug().Err(err).Msg("decode topic message failure")
 		return
 	}
 
 	if logTopicMessageReceived {
-		log.WithFields(logging.Fields{
-			"log_type": "message_received",
-			"peer":     p.alias,
-			"reliable": reliable,
-			"topic":    message.Topic,
-		}).Debug("message received")
+		log.Debug().
+			Uint64("peer", p.alias).
+			Bool("reliable", reliable).
+			Str("topic", message.Topic).
+			Msg("message received")
 	}
 
 	msg := &peerMessage{
@@ -213,7 +201,7 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 
 		rawMsgToServer, err := marshaller.Marshal(&message)
 		if err != nil {
-			p.logError(err).Error("encode topic message failure")
+			p.log.Error().Err(err).Msg("encode topic message failure")
 			return
 		}
 		msg.rawMsgToServer = rawMsgToServer
@@ -221,13 +209,13 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 
 	rawMsgToClient, err := marshaller.Marshal(&topicFWMessage)
 	if err != nil {
-		p.logError(err).Error("encode data message failure")
+		p.log.Error().Err(err).Msg("encode topicfwmessage failure")
 		return
 	}
 
 	msg.rawMsgToClient = rawMsgToClient
 
-	p.messagesQueue <- msg
+	p.messagesCh <- msg
 }
 
 func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
@@ -236,17 +224,16 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 	message := protocol.TopicIdentityMessage{}
 
 	if err := marshaller.Unmarshal(rawMsg, &message); err != nil {
-		p.logError(err).Debug("decode topic message failure")
+		p.log.Debug().Err(err).Msg("decode topic message failure")
 		return
 	}
 
 	if logTopicMessageReceived {
-		log.WithFields(logging.Fields{
-			"log_type": "message_received",
-			"peer":     p.alias,
-			"reliable": reliable,
-			"topic":    message.Topic,
-		}).Debug("identity message received")
+		log.Debug().
+			Uint64("peer", p.alias).
+			Bool("reliable", reliable).
+			Str("topic", message.Topic).
+			Msg("identity message received")
 	}
 
 	msg := &peerMessage{
@@ -278,7 +265,7 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 
 		rawMsgToServer, err := marshaller.Marshal(&message)
 		if err != nil {
-			p.logError(err).Error("encode topic message failure")
+			p.log.Error().Err(err).Msg("encode topic message failure")
 			return
 		}
 		msg.rawMsgToServer = rawMsgToServer
@@ -286,13 +273,13 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 
 	rawMsgToClient, err := marshaller.Marshal(&topicIdentityFWMessage)
 	if err != nil {
-		p.logError(err).Error("encode data message failure")
+		p.log.Error().Err(err).Msg("encode data message failure")
 		return
 	}
 
 	msg.rawMsgToClient = rawMsgToClient
 
-	p.messagesQueue <- msg
+	p.messagesCh <- msg
 }
 
 func (p *peer) WriteReliable(rawMsg []byte) error {
@@ -301,7 +288,7 @@ func (p *peer) WriteReliable(rawMsg []byte) error {
 	}
 
 	if _, err := p.reliableRWC.Write(rawMsg); err != nil {
-		p.logError(err).Error("Error writing reliable channel")
+		p.log.Error().Err(err).Msg("Error writing reliable channel")
 		p.Close()
 		return err
 	}
@@ -314,7 +301,7 @@ func (p *peer) WriteUnreliable(rawMsg []byte) error {
 	}
 
 	if _, err := p.unreliableRWC.Write(rawMsg); err != nil {
-		p.logError(err).Error("Error writing unreliable channel")
+		p.log.Error().Err(err).Msg("Error writing unreliable channel")
 		p.Close()
 		return err
 	}

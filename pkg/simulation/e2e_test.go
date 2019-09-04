@@ -4,18 +4,18 @@ package simulation
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 
 	"github.com/decentraland/webrtc-broker/pkg/commserver"
 	"github.com/decentraland/webrtc-broker/pkg/coordinator"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
-	"github.com/sirupsen/logrus"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,19 +26,16 @@ const (
 
 func printTitle(title string) {
 	s := fmt.Sprintf("=== %s ===", title)
-	log.Println(s)
+	fmt.Println(s)
 }
 
 func startCoordinator(t *testing.T) (*coordinator.State, *http.Server, string) {
-
-	log := logrus.New()
 	auth := &authentication.NoopAuthenticator{}
 	config := coordinator.Config{
 		ServerSelector: &coordinator.DefaultServerSelector{
 			ServerAliases: make(map[uint64]bool),
 		},
 		Auth: auth,
-		Log:  log,
 	}
 	state := coordinator.MakeState(&config)
 
@@ -72,8 +69,8 @@ type peerSnapshot struct {
 }
 
 type commServerSnapshot struct {
-	Alias     uint64
-	PeerCount int
+	Alias uint64
+	Peers []commserver.PeerStats
 }
 
 type testReporter struct {
@@ -85,8 +82,8 @@ func (r *testReporter) Report(stats commserver.Stats) {
 	select {
 	case <-r.RequestData:
 		snapshot := commServerSnapshot{
-			Alias:     stats.Alias,
-			PeerCount: len(stats.Peers),
+			Alias: stats.Alias,
+			Peers: stats.Peers,
 		}
 		r.Data <- snapshot
 	default:
@@ -99,8 +96,7 @@ func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 }
 
 func startCommServer(t *testing.T, coordinatorURL string) *testReporter {
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := logging.New().Level(zerolog.DebugLevel)
 	auth := &authentication.NoopAuthenticator{}
 
 	reporter := &testReporter{
@@ -110,7 +106,7 @@ func startCommServer(t *testing.T, coordinatorURL string) *testReporter {
 
 	config := commserver.Config{
 		Auth:           auth,
-		Log:            logger,
+		Log:            &logger,
 		CoordinatorURL: coordinatorURL,
 		ReportPeriod:   1 * time.Second,
 		Reporter:       func(stats commserver.Stats) { reporter.Report(stats) },
@@ -154,7 +150,7 @@ func TestE2E(t *testing.T) {
 	c1ReceivedReliable := make(chan recvMessage, 256)
 	c1ReceivedUnreliable := make(chan recvMessage, 256)
 
-	log := logrus.New()
+	log := logging.New()
 	config := Config{
 		Auth:           auth,
 		CoordinatorURL: coordinatorURL,
@@ -204,17 +200,17 @@ func TestE2E(t *testing.T) {
 	require.NotEmpty(t, comm1Snapshot.Alias)
 	require.NotEmpty(t, c1Data.Alias)
 	require.NotEmpty(t, c2Data.Alias)
-	require.Equal(t, 4, comm1Snapshot.PeerCount+comm2Snapshot.PeerCount)
+	require.Equal(t, 4, len(comm1Snapshot.Peers)+len(comm2Snapshot.Peers))
 
 	printTitle("Aliases")
-	log.Println("commserver1 alias is", comm1Snapshot.Alias)
-	log.Println("commserver2 alias is", comm2Snapshot.Alias)
-	log.Println("client1 alias is", c1Data.Alias)
-	log.Println("client2 alias is", c2Data.Alias)
+	log.Info().Msgf("commserver1 alias is %d", comm1Snapshot.Alias)
+	log.Info().Msgf("commserver2 alias is %d", comm2Snapshot.Alias)
+	log.Info().Msgf("client1 alias is %d", c1Data.Alias)
+	log.Info().Msgf("client2 alias is %d", c2Data.Alias)
 
 	printTitle("Connections")
-	// log.Println(comm1Snapshot.Peers)
-	// log.Println(comm2Snapshot.Peers)
+	fmt.Println(comm1Snapshot.Peers)
+	fmt.Println(comm2Snapshot.Peers)
 
 	printTitle("Authorizing clients")
 
@@ -343,5 +339,5 @@ func TestE2E(t *testing.T) {
 	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
 	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
 
-	log.Println("TEST END")
+	log.Info().Msg("TEST END")
 }

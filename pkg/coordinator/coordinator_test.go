@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/mock"
 
 	_testing "github.com/decentraland/webrtc-broker/internal/testing"
@@ -38,10 +37,7 @@ func makeDefaultServerSelector() *DefaultServerSelector {
 }
 
 func makeTestState() *State {
-	config := Config{
-		ServerSelector: makeDefaultServerSelector(),
-		Log:            logrus.New(),
-	}
+	config := Config{ServerSelector: makeDefaultServerSelector()}
 	return MakeState(&config)
 }
 
@@ -345,10 +341,7 @@ func TestRegisterClient(t *testing.T) {
 func TestUnregister(t *testing.T) {
 	selector := makeDefaultServerSelector()
 
-	config := Config{
-		ServerSelector: selector,
-		Log:            logrus.New(),
-	}
+	config := Config{ServerSelector: selector}
 	state := MakeState(&config)
 	state.unregister = make(chan *Peer)
 	defer closeState(state)
