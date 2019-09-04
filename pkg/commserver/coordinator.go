@@ -116,7 +116,7 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 				log.WithError(err).Debug("decode connect message failure")
 				continue
 			}
-			log.WithFields(logging.Fields{"to": connectMessage.FromAlias}).Debug("Connect message received")
+			log.WithFields(logging.Fields{"to": connectMessage.FromAlias}).Debug("Connect message received XXXX")
 			state.connectQueue <- connectMessage.FromAlias
 		default:
 			log.WithField("type", msgType).Debug("unhandled message from coordinator")

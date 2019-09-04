@@ -102,6 +102,7 @@ func (p *peer) readReliablePump() {
 
 		switch msgType {
 		case protocol.MessageType_SUBSCRIPTION:
+			p.log().WithField("type", msgType).Info("SUSCRIPTION")
 			topicSubscriptionMessage := &protocol.SubscriptionMessage{}
 			if err := marshaller.Unmarshal(rawMsg, topicSubscriptionMessage); err != nil {
 				p.logError(err).Debug("decode add topic message failure")

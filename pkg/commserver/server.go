@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -364,6 +365,9 @@ func Process(state *State) {
 				ignoreError(processConnect(state, alias))
 			}
 		case change := <-state.topicQueue:
+			fmt.Println("--------------------")
+			fmt.Println(state)
+			fmt.Println("--------------------")
 			ignoreError(processSubscriptionChange(state, change))
 			n := len(state.topicQueue)
 			for i := 0; i < n; i++ {
