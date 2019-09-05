@@ -756,11 +756,12 @@ func processSubscriptionChange(state *State, change topicChange) error {
 		rawTopics = unzipedTopics
 	}
 
-	newTopics := make([]string, len(rawTopics))
+	topics := bytes.Split(rawTopics, []byte(" "))
+	newTopics := make([]string, len(topics))
 
 	if len(rawTopics) > 0 {
 		// NOTE: check if topics were added
-		for i, rawTopic := range bytes.Split(rawTopics, []byte(" ")) {
+		for i, rawTopic := range topics {
 			topic := string(rawTopic)
 
 			newTopics[i] = topic
