@@ -15,9 +15,13 @@ import (
 )
 
 const (
-	defaultReportPeriod     = 30 * time.Second
-	maxWorldCommMessageSize = 5120
-	logTopicMessageReceived = false
+	defaultMaxPeerBufferSize                           uint64 = 1024 * 1024 // 1 MB
+	defaultReliableChannelBufferedAmountLowThreshold          = 0
+	defaultUnreliableChannelBufferedAmountLowThreshold        = 0
+	defaultReportPeriod                                       = 30 * time.Second
+	maxWorldCommMessageSize                                   = 5120
+	logTopicMessageReceived                                   = false
+	verbose                                                   = false
 )
 
 type topicChange struct {
@@ -67,7 +71,6 @@ func (ts *topicSubscriptions) buildTopicsBuffer() ([]byte, error) {
 
 func (ts *topicSubscriptions) AddClientSubscription(topic string, client *peer) (subscriptionChanged bool) {
 	s, ok := (*ts)[topic]
-
 	if ok {
 		s.clients = append(s.clients, client)
 		return false
@@ -167,6 +170,9 @@ type services struct {
 	Zipper     ZipCompression
 }
 
+// WriterControllerFactory ...
+type WriterControllerFactory = func(uint64, PeerWriter) WriterController
+
 // Config represents the communication server state
 type Config struct {
 	CoordinatorURL          string
@@ -180,6 +186,11 @@ type Config struct {
 	Reporter                func(stats Stats)
 	ICEServers              []ICEServer
 	ExitOnCoordinatorClose  bool
+
+	ReliableWriterControllerFactory             WriterControllerFactory
+	UnreliableWriterControllerFactory           WriterControllerFactory
+	ReliableChannelBufferedAmountLowThreshold   uint64
+	UnreliableChannelBufferedAmountLowThreshold uint64
 }
 
 // State is the commm server state
@@ -195,6 +206,11 @@ type State struct {
 	unregisterCh            chan *peer
 	reportPeriod            time.Duration
 	establishSessionTimeout time.Duration
+
+	reliableWriterControllerFactory             WriterControllerFactory
+	unreliableWriterControllerFactory           WriterControllerFactory
+	reliableChannelBufferedAmountLowThreshold   uint64
+	unreliableChannelBufferedAmountLowThreshold uint64
 
 	alias uint64
 
@@ -247,16 +263,40 @@ func MakeState(config *Config) (*State, error) {
 			send:        make(chan []byte, 256),
 			exitOnClose: config.ExitOnCoordinatorClose,
 		},
-		peers:                   make([]*peer, 0),
-		subscriptions:           make(topicSubscriptions),
-		unregisterCh:            make(chan *peer, 255),
-		topicCh:                 make(chan topicChange, 255),
-		connectCh:               make(chan uint64, 255),
-		messagesCh:              make(chan *peerMessage, 255),
-		webRtcControlCh:         make(chan *protocol.WebRtcMessage, 255),
-		reporter:                config.Reporter,
-		reportPeriod:            reportPeriod,
-		establishSessionTimeout: establishSessionTimeout,
+		peers:                             make([]*peer, 0),
+		subscriptions:                     make(topicSubscriptions),
+		unregisterCh:                      make(chan *peer, 255),
+		topicCh:                           make(chan topicChange, 255),
+		connectCh:                         make(chan uint64, 255),
+		messagesCh:                        make(chan *peerMessage, 255),
+		webRtcControlCh:                   make(chan *protocol.WebRtcMessage, 255),
+		reporter:                          config.Reporter,
+		reportPeriod:                      reportPeriod,
+		establishSessionTimeout:           establishSessionTimeout,
+		reliableWriterControllerFactory:   config.ReliableWriterControllerFactory,
+		unreliableWriterControllerFactory: config.UnreliableWriterControllerFactory,
+		reliableChannelBufferedAmountLowThreshold:   config.ReliableChannelBufferedAmountLowThreshold,
+		unreliableChannelBufferedAmountLowThreshold: config.UnreliableChannelBufferedAmountLowThreshold,
+	}
+
+	if state.reliableWriterControllerFactory == nil {
+		state.reliableWriterControllerFactory = func(alias uint64, writer PeerWriter) WriterController {
+			return NewBufferedWriterController(writer, 10, defaultMaxPeerBufferSize)
+		}
+	}
+
+	if state.unreliableWriterControllerFactory == nil {
+		state.unreliableWriterControllerFactory = func(alias uint64, writer PeerWriter) WriterController {
+			return NewFixedQueueWriterController(writer, 10, defaultMaxPeerBufferSize)
+		}
+	}
+
+	if state.reliableChannelBufferedAmountLowThreshold == 0 {
+		state.reliableChannelBufferedAmountLowThreshold = defaultReliableChannelBufferedAmountLowThreshold
+	}
+
+	if state.unreliableChannelBufferedAmountLowThreshold == 0 {
+		state.unreliableChannelBufferedAmountLowThreshold = defaultUnreliableChannelBufferedAmountLowThreshold
 	}
 
 	return state, nil
@@ -321,11 +361,16 @@ func ProcessMessagesQueue(state *State) {
 
 // Process start the peer processor
 func Process(state *State) {
-
 	log := state.services.Log
 
 	ticker := time.NewTicker(state.reportPeriod)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+
+		for _, p := range state.peers {
+			p.Close()
+		}
+	}()
 
 	ignoreError := func(err error) {
 		if err != nil {
@@ -407,10 +452,6 @@ func Shutdown(state *State) {
 	close(state.webRtcControlCh)
 	close(state.connectCh)
 
-	for _, p := range state.peers {
-		p.Close()
-	}
-
 	// NOTE(hugo): we cannot close this channels because they are
 	// shared with peers, we would need to wait for peers to be unnregistered first
 	// close(state.unregisterCh)
@@ -490,6 +531,7 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		}
 		return nil, err
 	}
+	p.reliableDC.SetBufferedAmountLowThreshold(state.reliableChannelBufferedAmountLowThreshold)
 
 	p.unreliableDC, err = s.WebRtc.createUnreliableDataChannel(conn)
 	if err != nil {
@@ -500,21 +542,30 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		}
 		return nil, err
 	}
+	p.unreliableDC.SetBufferedAmountLowThreshold(state.unreliableChannelBufferedAmountLowThreshold)
 
 	unreliableDCReady := make(chan bool)
 
 	state.peers = append(state.peers, p)
 
+	p.reliableWriter = state.reliableWriterControllerFactory(alias, &reliablePeerWriter{p})
+	p.reliableDC.OnBufferedAmountLow(p.reliableWriter.OnBufferedAmountLow)
+
+	p.unreliableWriter = state.unreliableWriterControllerFactory(alias, &unreliablePeerWriter{p})
+	p.unreliableDC.OnBufferedAmountLow(p.unreliableWriter.OnBufferedAmountLow)
+
 	s.WebRtc.registerOpenHandler(p.reliableDC, func() {
 		p.log.Info().Msg("Reliable data channel open")
-
 		d, err := s.WebRtc.detach(p.reliableDC)
 		if err != nil {
 			p.log.Error().Err(err).Msg("cannot detach data channel")
 			p.Close()
 			return
 		}
+
+		p.reliableRWCMutex.Lock()
 		p.reliableRWC = d
+		p.reliableRWCMutex.Unlock()
 
 		if role == protocol.Role_UNKNOWN_ROLE {
 			p.log.Debug().Msg("unknown role, waiting for auth message")
@@ -579,23 +630,21 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 						return
 					}
 
-					topicSubscriptionMessage := &protocol.SubscriptionMessage{
-						Type:   protocol.MessageType_SUBSCRIPTION,
-						Format: protocol.Format_PLAIN,
-						Topics: topics,
-					}
+					if len(topics) > 0 {
+						topicSubscriptionMessage := &protocol.SubscriptionMessage{
+							Type:   protocol.MessageType_SUBSCRIPTION,
+							Format: protocol.Format_PLAIN,
+							Topics: topics,
+						}
 
-					rawMsg, err := state.services.Marshaller.Marshal(topicSubscriptionMessage)
-					if err != nil {
-						p.log.Error().Err(err).Msg("encode topic subscription message failure")
-						p.Close()
-						return
-					}
+						rawMsg, err := state.services.Marshaller.Marshal(topicSubscriptionMessage)
+						if err != nil {
+							p.log.Error().Err(err).Msg("encode topic subscription message failure")
+							p.Close()
+							return
+						}
 
-					if err := p.WriteReliable(rawMsg); err != nil {
-						p.log.Error().Err(err).Msg("writing topic subscription message")
-						p.Close()
-						return
+						p.WriteReliable(rawMsg)
 					}
 				}
 			} else {
@@ -641,7 +690,10 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 			p.Close()
 			return
 		}
+
+		p.unreliableRWCMutex.Lock()
 		p.unreliableRWC = d
+		p.unreliableRWCMutex.Unlock()
 		unreliableDCReady <- true
 	})
 
@@ -879,6 +931,7 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 }
 
 func processTopicMessage(state *State, msg *peerMessage) {
+	log := state.services.Log
 	topic := msg.topic
 	fromServer := msg.fromServer
 	reliable := msg.reliable
@@ -886,48 +939,45 @@ func processTopicMessage(state *State, msg *peerMessage) {
 	state.subscriptionsLock.RLock()
 	defer state.subscriptionsLock.RUnlock()
 	subscription, ok := state.subscriptions[topic]
-
 	if !ok {
 		return
 	}
 
+	var clientCount uint32
 	for _, p := range subscription.clients {
 		if p == msg.from {
 			continue
 		}
 
+		clientCount++
 		rawMsg := msg.rawMsgToClient
 		if reliable {
-			if err := p.WriteReliable(rawMsg); err != nil {
-				p.log.Error().Err(err).Msg("error writing reliable message to client")
-				continue
-			}
+			p.WriteReliable(rawMsg)
 		} else {
-			if err := p.WriteUnreliable(rawMsg); err != nil {
-				p.log.Error().Err(err).Msg("error writing unreliable message to client")
-				continue
+			p.WriteUnreliable(rawMsg)
+		}
+	}
+
+	var serverCount uint32
+	if !fromServer && msg.rawMsgToServer != nil {
+		for _, p := range subscription.servers {
+			serverCount++
+			rawMsg := msg.rawMsgToServer
+			if reliable {
+				p.WriteReliable(rawMsg)
+			} else {
+				p.WriteUnreliable(rawMsg)
 			}
 		}
 	}
 
-	if !fromServer && msg.rawMsgToServer != nil {
-		for _, p := range subscription.servers {
-			if p.IsClosed() {
-				continue
-			}
-			rawMsg := msg.rawMsgToServer
-			if reliable {
-				if err := p.WriteReliable(rawMsg); err != nil {
-					p.log.Error().Err(err).Msg("error writing reliable message to server")
-					continue
-				}
-			} else {
-				if err := p.WriteUnreliable(rawMsg); err != nil {
-					p.log.Error().Err(err).Msg("error writing unreliable message to server")
-					continue
-				}
-			}
-		}
+	if verbose {
+		log.Debug().
+			Bool("reliable", reliable).
+			Bool("fromServer", fromServer).
+			Uint32("serverCount", serverCount).
+			Uint32("clientCount", clientCount).
+			Msg("broadcasting topic message")
 	}
 }
 
@@ -953,13 +1003,24 @@ func broadcastSubscriptionChange(state *State) error {
 		return err
 	}
 
+	var serverCount uint32
 	for _, p := range state.peers {
-		if p.role == protocol.Role_COMMUNICATION_SERVER && p.reliableRWC != nil {
+		if p.role == protocol.Role_COMMUNICATION_SERVER {
 			p.log.Debug().Msg("send topic change (to server)")
-			if err := p.WriteReliable(rawMsg); err != nil {
-				continue
-			}
+			serverCount++
+			p.WriteReliable(rawMsg)
 		}
+	}
+
+	if verbose {
+		log.Debug().
+			Uint32("serverCount", serverCount).
+			Str("topics", string(topics)).
+			Msg("subscription message broadcassted")
+	} else {
+		log.Debug().
+			Uint32("serverCount", serverCount).
+			Msg("subscription message broadcassted")
 	}
 
 	return nil

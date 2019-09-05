@@ -24,6 +24,9 @@ const (
 	longSleepPeriod = 15 * time.Second
 )
 
+type PeerWriter = commserver.PeerWriter
+type WriterController = commserver.WriterController
+
 func printTitle(title string) {
 	s := fmt.Sprintf("=== %s ===", title)
 	fmt.Println(s)
@@ -95,24 +98,19 @@ func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 	return <-r.Data
 }
 
-func startCommServer(t *testing.T, coordinatorURL string) (*commserver.State, *testReporter) {
-	logger := logging.New().Level(zerolog.WarnLevel)
-	auth := &authentication.NoopAuthenticator{}
-
+func startCommServer(t *testing.T, config *commserver.Config) (*commserver.State, *testReporter) {
 	reporter := &testReporter{
 		RequestData: make(chan bool),
 		Data:        make(chan commServerSnapshot),
 	}
 
-	config := commserver.Config{
-		Auth:           auth,
-		Log:            &logger,
-		CoordinatorURL: coordinatorURL,
-		ReportPeriod:   1 * time.Second,
-		Reporter:       func(stats commserver.Stats) { reporter.Report(stats) },
-	}
+	config.Auth = &authentication.NoopAuthenticator{}
+	log := logging.New().Level(zerolog.DebugLevel)
+	config.Log = &log
+	config.ReportPeriod = 1 * time.Second
+	config.Reporter = func(stats commserver.Stats) { reporter.Report(stats) }
 
-	ws, err := commserver.MakeState(&config)
+	ws, err := commserver.MakeState(config)
 	require.NoError(t, err)
 	t.Log("starting communication server node")
 
@@ -142,10 +140,12 @@ func TestGeneralExchange(t *testing.T) {
 	topicFWMessage := protocol.TopicFWMessage{}
 
 	printTitle("starting comm servers")
-	commserverState1, comm1Reporter := startCommServer(t, coordinatorURL)
+	comm1Config := &commserver.Config{CoordinatorURL: coordinatorURL}
+	commserverState1, comm1Reporter := startCommServer(t, comm1Config)
 	defer commserver.Shutdown(commserverState1)
 
-	commserverState2, comm2Reporter := startCommServer(t, coordinatorURL)
+	comm2Config := &commserver.Config{CoordinatorURL: coordinatorURL}
+	commserverState2, comm2Reporter := startCommServer(t, comm2Config)
 	defer commserver.Shutdown(commserverState2)
 
 	auth := &authentication.NoopAuthenticator{}
@@ -237,9 +237,7 @@ func TestGeneralExchange(t *testing.T) {
 	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
 
 	// NOTE: wait until subscriptions are ready
-	time.Sleep(sleepPeriod)
-	comm1Snapshot = comm1Reporter.GetStateSnapshot()
-	comm2Snapshot = comm2Reporter.GetStateSnapshot()
+	time.Sleep(longSleepPeriod)
 
 	printTitle("Each client sends a topic message, by reliable channel")
 	msg := protocol.TopicMessage{
@@ -336,126 +334,195 @@ func TestGeneralExchange(t *testing.T) {
 	log.Info().Msg("TEST END")
 }
 
+type session struct {
+	coordinator *http.Server
+
+	commServerState    *commserver.State
+	commServerReporter *testReporter
+
+	c1, c2           *Client
+	c1Alias, c2Alias uint64
+}
+
 func TestControlFlow(t *testing.T) {
-	_, server, coordinatorURL := startCoordinator(t, "localhost:9998")
-	defer server.Close()
+	prepare := func(t *testing.T, log *logging.Logger, commConfig *commserver.Config) session {
+		var s session
+		_, server, coordinatorURL := startCoordinator(t, "localhost:9998")
+		s.coordinator = server
 
-	// topicFWMessage := protocol.TopicFWMessage{}
+		printTitle("starting comm server")
+		commConfig.CoordinatorURL = coordinatorURL
+		commserverState, commReporter := startCommServer(t, commConfig)
+		s.commServerState = commserverState
+		s.commServerReporter = commReporter
 
-	printTitle("starting comm server")
-	commserverState1, comm1Reporter := startCommServer(t, coordinatorURL)
-	defer commserver.Shutdown(commserverState1)
+		auth := &authentication.NoopAuthenticator{}
 
-	auth := &authentication.NoopAuthenticator{}
+		config := Config{
+			Auth:           auth,
+			CoordinatorURL: coordinatorURL,
+			Log:            logging.New().Level(zerolog.WarnLevel),
+		}
+		s.c1 = MakeClient(&config)
 
-	c1ReceivedReliable := make(chan recvMessage, 256)
-	c1ReceivedUnreliable := make(chan recvMessage, 256)
+		config = Config{
+			Auth:           auth,
+			CoordinatorURL: coordinatorURL,
+			Log:            logging.New().Level(zerolog.WarnLevel),
+		}
+		s.c2 = MakeClient(&config)
 
-	log := logging.New()
-	config := Config{
-		Auth:           auth,
-		CoordinatorURL: coordinatorURL,
-		OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
-			m := recvMessage{msgType: msgType, raw: raw}
-			if reliable {
-				c1ReceivedReliable <- m
-			} else {
-				c1ReceivedUnreliable <- m
+		printTitle("Starting client1")
+		c1Data := start(t, s.c1)
+		require.NoError(t, s.c1.Connect(c1Data.Alias, c1Data.AvailableServers[0]))
+
+		printTitle("Starting client2")
+		c2Data := start(t, s.c2)
+		require.NoError(t, s.c2.Connect(c2Data.Alias, c2Data.AvailableServers[0]))
+
+		// NOTE: wait until connections are ready
+		time.Sleep(sleepPeriod)
+
+		comm1Snapshot := commReporter.GetStateSnapshot()
+		require.NotEmpty(t, comm1Snapshot.Alias)
+		require.NotEmpty(t, c1Data.Alias)
+		require.NotEmpty(t, c2Data.Alias)
+		require.Equal(t, 2, len(comm1Snapshot.Peers))
+
+		printTitle("Aliases")
+		log.Info().Msgf("commserver1 alias is %d", comm1Snapshot.Alias)
+		log.Info().Msgf("client1 alias is %d", c1Data.Alias)
+		log.Info().Msgf("client2 alias is %d", c2Data.Alias)
+		s.c1Alias = c1Data.Alias
+		s.c2Alias = c2Data.Alias
+
+		printTitle("Authorizing clients")
+		authMessage := protocol.AuthMessage{
+			Type: protocol.MessageType_AUTH,
+			Role: protocol.Role_CLIENT,
+		}
+		authBytes, err := proto.Marshal(&authMessage)
+		require.NoError(t, err)
+
+		s.c1.authMessage <- authBytes
+		s.c2.authMessage <- authBytes
+
+		// NOTE: wait until connections are authenticated
+		time.Sleep(longSleepPeriod)
+
+		printTitle("Both clients are subscribing to 'test' topic")
+		require.NoError(t, s.c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
+		require.NoError(t, s.c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
+
+		// NOTE: wait until subscriptions are ready
+		time.Sleep(sleepPeriod)
+
+		return s
+	}
+
+	t.Run("fixed queue controller", func(t *testing.T) {
+		log := logging.New()
+
+		var c2UnreliableWriter *commserver.FixedQueueWriterController
+		s := prepare(t, &log, &commserver.Config{
+			UnreliableWriterControllerFactory: func(alias uint64, writer PeerWriter) WriterController {
+				w := commserver.NewFixedQueueWriterController(writer, 100, 200)
+				if alias == 3 {
+					c2UnreliableWriter = w
+				}
+				return w
+			},
+		})
+		defer s.coordinator.Close()
+		defer commserver.Shutdown(s.commServerState)
+
+		msg := protocol.TopicMessage{
+			Type:  protocol.MessageType_TOPIC,
+			Topic: "test",
+			Body:  make([]byte, 100),
+		}
+		encodedMessage, err := proto.Marshal(&msg)
+		require.NoError(t, err)
+
+		messageCount := uint32(10000)
+		go func(messageCount uint32) {
+			for i := uint32(0); i < messageCount; i++ {
+				s.c1.SendUnreliable <- encodedMessage
 			}
-		},
-		Log: log,
-	}
-	c1 := MakeClient(&config)
+		}(messageCount)
 
-	// c2ReceivedReliable := make(chan recvMessage, 256)
-	// c2ReceivedUnreliable := make(chan recvMessage, 256)
-	config = Config{
-		Auth:           auth,
-		CoordinatorURL: coordinatorURL,
-		// OnMessageReceived: func(reliable bool, msgType protocol.MessageType, raw []byte) {
-		// 	m := recvMessage{msgType: msgType, raw: raw}
-		// 	if reliable {
-		// 		c2ReceivedReliable <- m
-		// 	} else {
-		// 		c2ReceivedUnreliable <- m
-		// 	}
-		// },
-		Log: log,
-	}
-	c2 := MakeClient(&config)
+		for {
+			client2Stats := s.commServerReporter.GetStateSnapshot().Peers[s.c2Alias]
+			unreliableBufferedAmount := client2Stats.UnreliableBufferedAmount
+			unreliableMessagesSent := client2Stats.UnreliableMessagesSent
+			discardedCount := c2UnreliableWriter.GetDiscardedCount()
+			log.Info().
+				Uint64("unreliable buffered amount", unreliableBufferedAmount).
+				Uint32("unreliable messages sent", unreliableMessagesSent).
+				Uint32("unreliable messages discarded", discardedCount).
+				Msg("buffered amount")
 
-	printTitle("Starting client1")
-	c1Data := start(t, c1)
-	require.NoError(t, c1.Connect(c1Data.Alias, c1Data.AvailableServers[0]))
+			require.LessOrEqual(t, unreliableBufferedAmount, uint64(150))
+			if (unreliableMessagesSent + discardedCount) == messageCount {
+				break
+			}
 
-	printTitle("Starting client2")
-	c2Data := start(t, c2)
-	require.NoError(t, c2.Connect(c2Data.Alias, c2Data.AvailableServers[0]))
-
-	// NOTE: wait until connections are ready
-	time.Sleep(sleepPeriod)
-
-	comm1Snapshot := comm1Reporter.GetStateSnapshot()
-	require.NotEmpty(t, comm1Snapshot.Alias)
-	require.NotEmpty(t, c1Data.Alias)
-	require.NotEmpty(t, c2Data.Alias)
-	require.Equal(t, 2, len(comm1Snapshot.Peers))
-
-	printTitle("Aliases")
-	log.Info().Msgf("commserver1 alias is %d", comm1Snapshot.Alias)
-	log.Info().Msgf("client1 alias is %d", c1Data.Alias)
-	log.Info().Msgf("client2 alias is %d", c2Data.Alias)
-
-	printTitle("Authorizing clients")
-	authMessage := protocol.AuthMessage{
-		Type: protocol.MessageType_AUTH,
-		Role: protocol.Role_CLIENT,
-	}
-	authBytes, err := proto.Marshal(&authMessage)
-	require.NoError(t, err)
-
-	c1.authMessage <- authBytes
-	c2.authMessage <- authBytes
-
-	// NOTE: wait until connections are authenticated
-	time.Sleep(longSleepPeriod)
-
-	printTitle("Both clients are subscribing to 'test' topic")
-	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
-	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
-
-	// NOTE: wait until subscriptions are ready
-	time.Sleep(sleepPeriod)
-
-	msg := protocol.TopicMessage{
-		Type:  protocol.MessageType_TOPIC,
-		Topic: "test",
-		Body:  make([]byte, 100),
-	}
-	encodedMessage, err := proto.Marshal(&msg)
-	require.NoError(t, err)
-
-	go func() {
-		for i := 0; i < 10000; i++ {
-			c1.SendReliable <- encodedMessage
-		}
-	}()
-
-	for {
-		client2Stats := comm1Reporter.GetStateSnapshot().Peers[c2Data.Alias]
-		reliableBufferedAmount := client2Stats.ReliableBufferedAmount
-		reliableMessagesSent := client2Stats.ReliableMessagesSent
-		log.Info().
-			Uint64("reliable buffered amount", reliableBufferedAmount).
-			Uint32("reliable messages sent", reliableMessagesSent).
-			Msg("buffered amount")
-
-		if reliableMessagesSent == 10000 {
-			break
+			time.Sleep(10 * time.Millisecond)
 		}
 
-		time.Sleep(100 * time.Millisecond)
-	}
+		log.Info().Msg("TEST END")
+	})
 
-	log.Info().Msg("TEST END")
+	t.Run("discard writer controller", func(t *testing.T) {
+		log := logging.New()
+
+		var c2UnreliableWriter *commserver.DiscardWriterController
+		s := prepare(t, &log, &commserver.Config{
+			UnreliableWriterControllerFactory: func(alias uint64, writer PeerWriter) WriterController {
+				w := commserver.NewDiscardWriterController(writer, 200)
+				if alias == 3 {
+					c2UnreliableWriter = w
+				}
+				return w
+			},
+		})
+		defer s.coordinator.Close()
+		defer commserver.Shutdown(s.commServerState)
+
+		msg := protocol.TopicMessage{
+			Type:  protocol.MessageType_TOPIC,
+			Topic: "test",
+			Body:  make([]byte, 100),
+		}
+		encodedMessage, err := proto.Marshal(&msg)
+		require.NoError(t, err)
+
+		messageCount := uint32(10000)
+		go func(messageCount uint32) {
+			for i := uint32(0); i < messageCount; i++ {
+				s.c1.SendUnreliable <- encodedMessage
+			}
+		}(messageCount)
+
+		for {
+			client2Stats := s.commServerReporter.GetStateSnapshot().Peers[s.c2Alias]
+			unreliableBufferedAmount := client2Stats.UnreliableBufferedAmount
+			unreliableMessagesSent := client2Stats.UnreliableMessagesSent
+			discardedCount := c2UnreliableWriter.GetDiscardedCount()
+			log.Info().
+				Uint64("unreliable buffered amount", unreliableBufferedAmount).
+				Uint32("unreliable messages sent", unreliableMessagesSent).
+				Uint32("unreliable messages discarded", discardedCount).
+				Msg("buffered amount")
+
+			require.LessOrEqual(t, unreliableBufferedAmount, uint64(100))
+			if (unreliableMessagesSent + discardedCount) == messageCount {
+				break
+			}
+
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		log.Info().Msg("TEST END")
+	})
 }

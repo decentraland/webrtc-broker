@@ -1,11 +1,82 @@
 package commserver
 
 import (
+	"runtime/debug"
+	"sync"
 	"sync/atomic"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 )
+
+// PeerWriter represents the basic write operations for a peer dc
+type PeerWriter interface {
+	BufferedAmount() uint64
+	Write(p []byte) error
+}
+
+type reliablePeerWriter struct {
+	p *peer
+}
+
+func (w *reliablePeerWriter) BufferedAmount() uint64 {
+	return w.p.reliableDC.BufferedAmount()
+}
+
+func (w *reliablePeerWriter) Write(p []byte) error {
+	if len(p) == 0 {
+		debug.PrintStack()
+		w.p.log.Fatal().Msg("trying to write an empty message to a reliable channel")
+	}
+	w.p.reliableRWCMutex.RLock()
+	reliableRWC := w.p.reliableRWC
+	w.p.reliableRWCMutex.RUnlock()
+
+	if reliableRWC != nil {
+		_, err := reliableRWC.Write(p)
+		if err != nil {
+			w.p.log.Error().Err(err).Msg("Error writing reliable datachannel")
+			w.p.Close()
+			return err
+		}
+	}
+	return nil
+}
+
+type unreliablePeerWriter struct {
+	p *peer
+}
+
+func (w *unreliablePeerWriter) BufferedAmount() uint64 {
+	return w.p.unreliableDC.BufferedAmount()
+}
+
+func (w *unreliablePeerWriter) Write(p []byte) error {
+	if len(p) == 0 {
+		debug.PrintStack()
+		w.p.log.Fatal().Msg("trying to write an empty message to a unreliable channel")
+	}
+	w.p.unreliableRWCMutex.RLock()
+	unreliableRWC := w.p.unreliableRWC
+	w.p.unreliableRWCMutex.RUnlock()
+
+	if unreliableRWC != nil {
+		_, err := unreliableRWC.Write(p)
+		if err != nil {
+			w.p.log.Error().Err(err).Msg("Error writing unreliable datachannel")
+			w.p.Close()
+			return err
+		}
+	}
+
+	return nil
+}
+
+// WriterController is in charge of the peer writer flow control
+type WriterController interface {
+	Write(byte []byte)
+	OnBufferedAmountLow()
+}
 
 type peer struct {
 	alias    uint64
@@ -19,14 +90,17 @@ type peer struct {
 	messagesCh   chan *peerMessage
 	unregisterCh chan *peer
 
-	reliableDC   *DataChannel
-	unreliableDC *DataChannel
+	reliableDC       *DataChannel
+	reliableRWCMutex sync.RWMutex
+	reliableRWC      ReadWriteCloser
+	reliableBuffer   []byte
+	reliableWriter   WriterController
 
-	reliableRWC    ReadWriteCloser
-	reliableBuffer []byte
-
-	unreliableRWC    ReadWriteCloser
-	unreliableBuffer []byte
+	unreliableDC       *DataChannel
+	unreliableRWCMutex sync.RWMutex
+	unreliableRWC      ReadWriteCloser
+	unreliableBuffer   []byte
+	unreliableWriter   WriterController
 
 	conn *PeerConnection
 	role protocol.Role
@@ -68,8 +142,12 @@ func (p *peer) readReliablePump() {
 	}
 
 	buffer := p.reliableBuffer
+
+	p.reliableRWCMutex.RLock()
+	reliableRWC := p.reliableRWC
+	p.reliableRWCMutex.RUnlock()
 	for {
-		n, err := p.reliableRWC.Read(buffer)
+		n, err := reliableRWC.Read(buffer)
 
 		if err != nil {
 			p.log.Info().Err(err).Msg("exit peer.readReliablePump(), datachannel closed")
@@ -78,6 +156,7 @@ func (p *peer) readReliablePump() {
 		}
 
 		if n == 0 {
+			p.log.Debug().Msg("0 bytes read")
 			continue
 		}
 
@@ -97,19 +176,42 @@ func (p *peer) readReliablePump() {
 				continue
 			}
 
+			if verbose {
+				p.log.Debug().
+					Str("message type", "subscription").
+					Bool("reliable", true).
+					Msg("got a new message")
+			}
+
 			p.topicCh <- topicChange{
 				peer:      p,
 				format:    topicSubscriptionMessage.Format,
 				rawTopics: topicSubscriptionMessage.Topics,
 			}
 		case protocol.MessageType_TOPIC:
+			if verbose {
+				p.log.Debug().
+					Str("message type", "topic").
+					Bool("reliable", true).
+					Msg("got a new message")
+			}
 			p.readTopicMessage(true, rawMsg)
 		case protocol.MessageType_TOPIC_IDENTITY:
+			if verbose {
+				p.log.Debug().
+					Str("message type", "topic identity").
+					Bool("reliable", true).
+					Msg("got a new message")
+			}
 			p.readTopicIdentityMessage(true, rawMsg)
 		case protocol.MessageType_PING:
-			if err := p.WriteReliable(rawMsg); err != nil {
-				p.log.Debug().Err(err).Msg("error writing ping messag")
+			if verbose {
+				p.log.Debug().
+					Str("message type", "ping").
+					Bool("reliable", true).
+					Msg("got a new message")
 			}
+			p.WriteReliable(rawMsg)
 		default:
 			p.log.Debug().Str("type", msgType.String()).Msg("unhandled reliable message from peer")
 		}
@@ -125,9 +227,13 @@ func (p *peer) readUnreliablePump() {
 		p.unreliableBuffer = make([]byte, maxWorldCommMessageSize)
 	}
 
+	p.unreliableRWCMutex.RLock()
+	unreliableRWC := p.unreliableRWC
+	p.unreliableRWCMutex.RUnlock()
+
 	buffer := p.unreliableBuffer
 	for {
-		n, err := p.unreliableRWC.Read(buffer)
+		n, err := unreliableRWC.Read(buffer)
 
 		if err != nil {
 			p.log.Info().Err(err).Msg("exit peer.readUnreliablePump(), datachannel closed")
@@ -136,6 +242,7 @@ func (p *peer) readUnreliablePump() {
 		}
 
 		if n == 0 {
+			p.log.Debug().Msg("0 bytes read")
 			continue
 		}
 
@@ -149,13 +256,29 @@ func (p *peer) readUnreliablePump() {
 
 		switch msgType {
 		case protocol.MessageType_TOPIC:
+			if verbose {
+				p.log.Debug().
+					Str("message type", "topic").
+					Bool("reliable", false).
+					Msg("got a new message")
+			}
 			p.readTopicMessage(false, rawMsg)
 		case protocol.MessageType_TOPIC_IDENTITY:
+			if verbose {
+				p.log.Debug().
+					Str("message type", "topic identity").
+					Bool("reliable", false).
+					Msg("got a new message")
+			}
 			p.readTopicIdentityMessage(false, rawMsg)
 		case protocol.MessageType_PING:
-			if err := p.WriteUnreliable(rawMsg); err != nil {
-				p.log.Debug().Err(err).Msg("error writing ping messag")
+			if verbose {
+				p.log.Debug().
+					Str("message type", "ping").
+					Bool("reliable", false).
+					Msg("got a new message")
 			}
+			p.WriteUnreliable(rawMsg)
 		default:
 			p.log.Debug().Str("type", msgType.String()).Msg("unhandled unreliable message from peer")
 		}
@@ -281,28 +404,10 @@ func (p *peer) readTopicIdentityMessage(reliable bool, rawMsg []byte) {
 	p.messagesCh <- msg
 }
 
-func (p *peer) WriteReliable(rawMsg []byte) error {
-	if p.reliableRWC == nil {
-		return nil
-	}
-
-	if _, err := p.reliableRWC.Write(rawMsg); err != nil {
-		p.log.Error().Err(err).Msg("Error writing reliable channel")
-		p.Close()
-		return err
-	}
-	return nil
+func (p *peer) WriteReliable(rawMsg []byte) {
+	p.reliableWriter.Write(rawMsg)
 }
 
-func (p *peer) WriteUnreliable(rawMsg []byte) error {
-	if p.unreliableRWC == nil {
-		return nil
-	}
-
-	if _, err := p.unreliableRWC.Write(rawMsg); err != nil {
-		p.log.Error().Err(err).Msg("Error writing unreliable channel")
-		p.Close()
-		return err
-	}
-	return nil
+func (p *peer) WriteUnreliable(rawMsg []byte) {
+	p.unreliableWriter.Write(rawMsg)
 }

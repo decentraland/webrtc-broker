@@ -173,26 +173,28 @@ func makeTestState(t *testing.T, config *Config) *State {
 }
 
 func makeClient(alias uint64, ss services) *peer {
-	return &peer{
+	p := &peer{
 		services: ss,
 		alias:    alias,
 		conn:     &pion.PeerConnection{},
 		topics:   make(map[string]struct{}),
 		role:     protocol.Role_CLIENT,
 	}
+	p.reliableWriter = NewUnboundedWriterController(&reliablePeerWriter{p})
+	p.unreliableWriter = NewUnboundedWriterController(&unreliablePeerWriter{p})
+	return p
 }
 
 func makeServer(alias uint64, ss services) *peer {
-	return &peer{
-		services: ss,
-		alias:    alias,
-		conn:     &pion.PeerConnection{},
-		topics:   make(map[string]struct{}),
-		role:     protocol.Role_COMMUNICATION_SERVER,
-	}
+	p := makeClient(alias, ss)
+	p.role = protocol.Role_COMMUNICATION_SERVER
+	return p
 }
 
 func addPeer(state *State, p *peer) *peer {
+	p.topicCh = state.topicCh
+	p.messagesCh = state.messagesCh
+	p.unregisterCh = state.unregisterCh
 	state.peers = append(state.peers, p)
 	return p
 }
@@ -244,7 +246,7 @@ func TestCoordinatorReadPump(t *testing.T) {
 		require.NoError(t, err)
 
 		conn.
-			On("Close").Return(nil).Once().
+			On("Close").Return(nil).
 			On("ReadMessage").Return(encodedMsg, nil).Once().
 			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
 			On("SetReadLimit", mock.Anything).Return(nil).Once().
@@ -270,7 +272,7 @@ func TestCoordinatorReadPump(t *testing.T) {
 		require.NoError(t, err)
 
 		conn.
-			On("Close").Return(nil).Once().
+			On("Close").Return(nil).
 			On("ReadMessage").Return(encodedMsg, nil).Once().
 			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
 			On("SetReadLimit", mock.Anything).Return(nil).Once().
@@ -296,7 +298,7 @@ func TestCoordinatorReadPump(t *testing.T) {
 		require.NoError(t, err)
 
 		conn.
-			On("Close").Return(nil).Once().
+			On("Close").Return(nil).
 			On("ReadMessage").Return(encodedMsg, nil).Once().
 			On("ReadMessage").Return([]byte{}, errors.New("stop")).Once().
 			On("SetReadLimit", mock.Anything).Return(nil).Once().
@@ -320,7 +322,7 @@ func TestCoordinatorWritePump(t *testing.T) {
 	state := makeTestState(t, config)
 	conn := &MockWebsocket{}
 	conn.
-		On("Close").Return(nil).Once().
+		On("Close").Return(nil).
 		On("WriteMessage", msg).Return(nil).Once().
 		On("WriteMessage", msg).Return(errors.New("stop")).Once().
 		On("SetWriteDeadline", mock.Anything).Return(nil).Once()
@@ -530,7 +532,7 @@ func TestInitPeer(t *testing.T) {
 			On("createReliableDataChannel", mock.Anything).Return(reliableDC, nil).
 			On("createUnreliableDataChannel", mock.Anything).Return(unreliableDC, nil).
 			On("registerOpenHandler", mock.Anything, mock.Anything).
-			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(nil).
 			On("close", conn).Return(errors.New("already closed"))
 
 		state := makeTestState(t, config)
@@ -1048,12 +1050,12 @@ func TestProcessConnect(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn1, nil).Once().
-			On("isNew", conn1).Return(true).Once().
-			On("close", conn1).Return(nil).Once().
+			On("isNew", conn1).Return(true).Maybe().
+			On("close", conn1).Return(nil).
 			On("createOffer", conn1).Return(offer, nil).Once().
 			On("newConnection", uint64(2)).Return(conn2, nil).Once().
-			On("isNew", conn2).Return(true).Once().
-			On("close", conn2).Return(nil).Once().
+			On("isNew", conn2).Return(true).Maybe().
+			On("close", conn2).Return(nil).
 			On("createOffer", conn2).Return(offer, nil).Once().
 			On("createReliableDataChannel", mock.Anything).Return(dc, nil).
 			On("createUnreliableDataChannel", mock.Anything).Return(dc, nil).
@@ -1083,8 +1085,8 @@ func TestProcessConnect(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn, nil).
-			On("isNew", conn).Return(true).Once().
-			On("close", conn).Return(nil).Once().
+			On("isNew", conn).Return(true).Maybe().
+			On("close", conn).Return(nil).
 			On("createOffer", conn).Return(pion.SessionDescription{}, errors.New("cannot create offer")).Once().
 			On("createReliableDataChannel", conn).Return(dc, nil).
 			On("createUnreliableDataChannel", conn).Return(dc, nil).
@@ -1107,18 +1109,15 @@ func TestProcessConnect(t *testing.T) {
 
 func TestProcessSubscriptionChange(t *testing.T) {
 	setupPeer := func(state *State, alias uint64, role protocol.Role) *peer {
-		p := &peer{
-			services: state.services,
-			alias:    alias,
-			role:     role,
-			topics:   make(map[string]struct{}),
-		}
-
+		p := makeClient(alias, state.services)
+		p.role = role
 		return addPeer(state, p)
 	}
 
 	t.Run("add topic from clients", func(t *testing.T) {
-		config := makeTestConfig()
+		webRtc := &mockWebRtc{}
+		webRtc.On("close", mock.Anything).Return(nil)
+		config := makeTestConfigWithWebRtc(nil, webRtc)
 		state := makeTestState(t, config)
 
 		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
@@ -1293,7 +1292,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn, nil).Once().
-			On("isNew", conn).Return(true).Once().
+			On("isNew", conn).Return(true).Maybe().
 			On("close", conn).Return(nil).Once().
 			On("onOffer", conn, offer).Return(pion.SessionDescription{}, nil).Once().
 			On("createReliableDataChannel", conn).Return(dc, nil).Once().
@@ -1330,6 +1329,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		webRtc := &mockWebRtc{}
 		webRtc.
+			On("close", mock.Anything).Return(nil).Twice().
 			On("onOffer", mock.Anything, offer).Return(pion.SessionDescription{}, nil).Twice()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
@@ -1368,6 +1368,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		webRtc := &mockWebRtc{}
 		webRtc.
+			On("close", mock.Anything).Return(nil).Once().
 			On("onOffer", mock.Anything, offer).
 			Return(pion.SessionDescription{}, errors.New("offer error")).
 			Once()
@@ -1400,7 +1401,8 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onAnswer", mock.Anything, answer).Return(nil).Once()
+			On("onAnswer", mock.Anything, answer).Return(nil).Once().
+			On("close", mock.Anything).Return(nil).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
@@ -1425,7 +1427,8 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		candidate := pion.ICECandidateInit{Candidate: "sdp-candidate"}
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("onIceCandidate", mock.Anything, candidate).Return(nil).Once()
+			On("onIceCandidate", mock.Anything, candidate).Return(nil).Once().
+			On("close", mock.Anything).Return(nil).Once()
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
@@ -1449,32 +1452,22 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 func TestProcessTopicMessage(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		p1 := &peer{
-			alias:  1,
-			conn:   &pion.PeerConnection{},
-			topics: map[string]struct{}{"topic1": {}},
-		}
+		ss := makeTestServices(makeDefaultMockWebRtc())
+
+		p1 := makeClient(1, ss)
+		p1.topics = map[string]struct{}{"topic1": {}}
 
 		p2ReliableRWC := &mockReadWriteCloser{}
 		p2ReliableRWC.On("Write", mock.Anything).Return(0, nil).Once()
-		p2 := &peer{
-			alias:       2,
-			reliableRWC: p2ReliableRWC,
-			conn:        &pion.PeerConnection{},
-			topics:      map[string]struct{}{"topic1": {}},
-		}
+		p2 := makeClient(2, ss)
+		p2.reliableRWC = p2ReliableRWC
+		p2.topics = map[string]struct{}{"topic1": {}}
 
-		p3 := &peer{
-			alias:  3,
-			conn:   &pion.PeerConnection{},
-			topics: make(map[string]struct{}),
-		}
+		p3 := makeClient(3, ss)
+		p3.topics = make(map[string]struct{})
 
-		p4 := &peer{
-			alias:  4,
-			conn:   &pion.PeerConnection{},
-			topics: map[string]struct{}{"topic1": {}},
-		}
+		p4 := makeClient(4, ss)
+		p4.topics = map[string]struct{}{"topic1": {}}
 
 		webRtc := &mockWebRtc{}
 		config := makeTestConfigWithWebRtc(nil, webRtc)
@@ -1491,9 +1484,10 @@ func TestProcessTopicMessage(t *testing.T) {
 		state.subscriptions.AddClientSubscription("topic1", p4)
 
 		state.messagesCh <- &peerMessage{
-			reliable: true,
-			topic:    "topic1",
-			from:     p1,
+			reliable:       true,
+			topic:          "topic1",
+			from:           p1,
+			rawMsgToClient: make([]byte, 10),
 		}
 		close(state.messagesCh)
 
@@ -1504,24 +1498,16 @@ func TestProcessTopicMessage(t *testing.T) {
 	})
 
 	t.Run("success multiple messages", func(t *testing.T) {
-		p1 := &peer{
-			alias: 1,
-			conn:  &pion.PeerConnection{},
-			topics: map[string]struct{}{
-				"topic1": {},
-			},
-		}
+		ss := makeTestServices(makeDefaultMockWebRtc())
 
+		p1 := makeClient(1, ss)
+		p1.topics = map[string]struct{}{"topic1": {}}
+
+		p2 := makeClient(2, ss)
 		p2ReliableRWC := &mockReadWriteCloser{}
 		p2ReliableRWC.On("Write", mock.Anything).Return(0, nil).Twice()
-		p2 := &peer{
-			alias:       2,
-			reliableRWC: p2ReliableRWC,
-			conn:        &pion.PeerConnection{},
-			topics: map[string]struct{}{
-				"topic1": {},
-			},
-		}
+		p2.reliableRWC = p2ReliableRWC
+		p2.topics = map[string]struct{}{"topic1": {}}
 
 		webRtc := &mockWebRtc{}
 		config := makeTestConfigWithWebRtc(nil, webRtc)
@@ -1535,15 +1521,17 @@ func TestProcessTopicMessage(t *testing.T) {
 		state.subscriptions.AddClientSubscription("topic1", p2)
 
 		state.messagesCh <- &peerMessage{
-			reliable: true,
-			topic:    "topic1",
-			from:     p1,
+			reliable:       true,
+			topic:          "topic1",
+			from:           p1,
+			rawMsgToClient: make([]byte, 10),
 		}
 
 		state.messagesCh <- &peerMessage{
-			reliable: true,
-			topic:    "topic1",
-			from:     p1,
+			reliable:       true,
+			topic:          "topic1",
+			from:           p1,
+			rawMsgToClient: make([]byte, 10),
 		}
 		close(state.messagesCh)
 
