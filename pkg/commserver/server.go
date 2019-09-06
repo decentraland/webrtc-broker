@@ -786,7 +786,8 @@ func processSubscriptionChange(state *State, change topicChange) error {
 
 	// NOTE: check if topics were deleted
 	for topic := range p.topics {
-		if sort.SearchStrings(newTopics, topic) < len(newTopics) {
+		ix := sort.SearchStrings(newTopics, topic)
+		if ix < len(newTopics) && newTopics[ix] == topic {
 			continue
 		}
 

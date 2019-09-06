@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -1219,6 +1220,38 @@ func TestProcessSubscriptionChange(t *testing.T) {
 		require.Len(t, state.subscriptions, 0)
 		require.Len(t, c1.topics, 0)
 		require.Len(t, c2.topics, 0)
+
+		s1ReliableRWC.AssertExpectations(t)
+	})
+
+	t.Run("change topic from clients", func(t *testing.T) {
+		config := makeTestConfig()
+		state := makeTestState(t, config)
+
+		s1 := setupPeer(state, 3, protocol.Role_COMMUNICATION_SERVER)
+		s1ReliableRWC := mockReadWriteCloser{}
+		s1.reliableRWC = &s1ReliableRWC
+		s1ReliableRWC.On("Write", mock.Anything).Return(0, nil)
+
+		c1 := setupPeer(state, 1, protocol.Role_CLIENT)
+		rawTopics := "55:28 55:29 55:30 56:28 56:29 56:30 57:28 57:29 57:30"
+		for _, topic := range strings.Split(rawTopics, " ") {
+			c1.topics[topic] = struct{}{}
+		}
+
+		state.subscriptions.AddClientSubscription("topic1", c1)
+
+		state.topicCh <- topicChange{
+			peer:      c1,
+			format:    protocol.Format_PLAIN,
+			rawTopics: []byte("55:29 55:30 55:31 56:29 56:30 56:31 57:29 57:30 57:31"),
+		}
+
+		close(state.topicCh)
+
+		Process(state)
+
+		require.Len(t, c1.topics, 9)
 
 		s1ReliableRWC.AssertExpectations(t)
 	})
