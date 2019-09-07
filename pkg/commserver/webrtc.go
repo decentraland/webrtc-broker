@@ -1,6 +1,9 @@
 package commserver
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"io"
 	"time"
 
@@ -49,7 +52,25 @@ type IWebRtc interface {
 
 // WebRtc is our inmplemenation of IWebRtc
 type webRTC struct {
-	ICEServers []ICEServer
+	ICEServers  []ICEServer
+	certificate *pion.Certificate
+}
+
+func (w *webRTC) getCertificates() ([]pion.Certificate, error) {
+	if w.certificate == nil ||
+		(!w.certificate.Expires().IsZero() && time.Now().After(w.certificate.Expires())) {
+		// dtls cert
+		sk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		w.certificate, err = pion.GenerateCertificate(sk)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return []pion.Certificate{*w.certificate}, nil
 }
 
 func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
@@ -66,8 +87,14 @@ func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 
 	api := pion.NewAPI(pion.WithSettingEngine(s))
 
+	certs, err := w.getCertificates()
+	if err != nil {
+		return nil, err
+	}
+
 	conn, err := api.NewPeerConnection(pion.Configuration{
-		ICEServers: w.ICEServers,
+		ICEServers:   w.ICEServers,
+		Certificates: certs,
 	})
 	if err != nil {
 		return nil, err

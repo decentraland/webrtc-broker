@@ -1607,3 +1607,15 @@ func BenchmarkProcessSubscriptionChange(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkInitPeer(b *testing.B) {
+	config := Config{}
+
+	state, err := MakeState(&config)
+	require.NoError(b, err)
+
+	for i := 0; i < b.N; i++ {
+		_, err := initPeer(state, uint64(i), protocol.Role_UNKNOWN_ROLE)
+		require.NoError(b, err)
+	}
+}
