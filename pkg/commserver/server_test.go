@@ -137,7 +137,7 @@ func (m *mockWebRtc) getStats(conn *PeerConnection) pion.StatsReport {
 func makeDefaultMockWebRtc() *mockWebRtc {
 	mockWebRtc := &mockWebRtc{}
 	mockWebRtc.
-		On("close", mock.Anything).Return(nil).Once().
+		On("close", mock.Anything).Return(nil).
 		On("close", mock.Anything).Return(errors.New("already closed"))
 	return mockWebRtc
 }
@@ -1293,7 +1293,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc.
 			On("newConnection", uint64(1)).Return(conn, nil).Once().
 			On("isNew", conn).Return(true).Maybe().
-			On("close", conn).Return(nil).Once().
+			On("close", conn).Return(nil).
 			On("onOffer", conn, offer).Return(pion.SessionDescription{}, nil).Once().
 			On("createReliableDataChannel", conn).Return(dc, nil).Once().
 			On("createUnreliableDataChannel", conn).Return(dc, nil).Once().
@@ -1368,7 +1368,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 
 		webRtc := &mockWebRtc{}
 		webRtc.
-			On("close", mock.Anything).Return(nil).Once().
+			On("close", mock.Anything).Return(nil).
 			On("onOffer", mock.Anything, offer).
 			Return(pion.SessionDescription{}, errors.New("offer error")).
 			Once()
@@ -1402,7 +1402,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onAnswer", mock.Anything, answer).Return(nil).Once().
-			On("close", mock.Anything).Return(nil).Once()
+			On("close", mock.Anything).Return(nil)
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
@@ -1428,7 +1428,7 @@ func TestProcessWebRtcMessage(t *testing.T) {
 		webRtc := &mockWebRtc{}
 		webRtc.
 			On("onIceCandidate", mock.Anything, candidate).Return(nil).Once().
-			On("close", mock.Anything).Return(nil).Once()
+			On("close", mock.Anything).Return(nil)
 		config := makeTestConfigWithWebRtc(nil, webRtc)
 
 		state := makeTestState(t, config)
