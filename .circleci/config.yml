@@ -1,8 +1,5 @@
 version: 2.1
 
-orbs:
-  tools: gotest/tools@0.0.10
-
 jobs:
   build:
     docker:
@@ -12,8 +9,19 @@ jobs:
       - checkout
       - run: make test
 
+  lint:
+    docker:
+      - image: circleci/golang:1.13
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - run: GO111MODULE=off go get -u github.com/golangci/golangci-lint/cmd/golangci-lint
+      - run: GO111MODULE=off go get -u golang.org/x/lint/golint
+      - run: make lint
+      - run: make lintci
+
 workflows:
   build_and_test:
     jobs:
       - build
-      - tools/lint
+      - lint
