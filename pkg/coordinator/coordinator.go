@@ -514,12 +514,8 @@ func signal(state *State, inMsg *inMessage) {
 	}
 }
 
-func repackageWebRtcMessage(
-	state *State,
-	from *Peer,
-	bytes []byte,
+func repackageWebRtcMessage(state *State, from *Peer, bytes []byte,
 	webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
-
 	log := state.log
 	marshaller := state.marshaller
 	if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {

@@ -42,7 +42,6 @@ func makeTestState() *State {
 }
 
 func TestUpgradeRequest(t *testing.T) {
-
 	testSuccessfulUpgrade := func(t *testing.T, req *http.Request, expectedRole protocol.Role) {
 		auth := &mockCoordinatorAuthenticator{}
 		auth.On("AuthenticateFromURL", expectedRole, mock.Anything).Return(true, nil).Once()

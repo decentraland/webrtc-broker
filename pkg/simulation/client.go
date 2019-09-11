@@ -282,7 +282,6 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 			go readPump(client, dd, reliable)
 			go writePump(client, dd, reliable)
 		})
-
 	})
 
 	return nil

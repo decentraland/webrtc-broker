@@ -84,7 +84,6 @@ func StartBot(opts BotOptions) {
 						}
 					}
 				}
-
 			}
 		}()
 	}
