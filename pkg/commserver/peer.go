@@ -105,6 +105,9 @@ type peer struct {
 	conn *PeerConnection
 	role protocol.Role
 
+	candidatesMux     sync.Mutex
+	pendingCandidates []*ICECandidate
+
 	log logging.Logger
 }
 

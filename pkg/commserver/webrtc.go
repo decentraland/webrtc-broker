@@ -33,6 +33,9 @@ type ICEConnectionState = pion.ICEConnectionState
 // ICECandidateType is the pion's ICECandidateType
 type ICECandidateType = pion.ICECandidateType
 
+// ICECandidate is the pion's ICECandidate
+type ICECandidate = pion.ICECandidate
+
 // IWebRtc is this module interface
 type IWebRtc interface {
 	newConnection(peerAlias uint64) (*PeerConnection, error)

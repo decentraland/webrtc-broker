@@ -459,6 +459,27 @@ func Shutdown(state *State) {
 	// close(state.messagesCh)
 }
 
+func sendICECandidate(state *State, alias uint64, candidate *ICECandidate) {
+	log := state.services.Log
+	iceCandidateInit := candidate.ToJSON()
+
+	serializedCandidate, err := json.Marshal(iceCandidateInit)
+	if err != nil {
+		log.Error().Uint64("peer", alias).Err(err).Msg("cannot serialize candidate")
+		return
+	}
+
+	err = state.coordinator.Send(state, &protocol.WebRtcMessage{
+		Type:    protocol.MessageType_WEBRTC_ICE_CANDIDATE,
+		Data:    serializedCandidate,
+		ToAlias: alias,
+	})
+	if err != nil {
+		log.Error().Uint64("peer", alias).Err(err).Msg("cannot send ICE candidate")
+		return
+	}
+}
+
 func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 	s := state.services
 	log := s.Log
@@ -484,27 +505,20 @@ func initPeer(state *State, alias uint64, role protocol.Role) (*peer, error) {
 		log:          log.With().Uint64("serverAlias", state.alias).Uint64("peer", alias).Logger(),
 	}
 
-	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
+	conn.OnICECandidate(func(candidate *ICECandidate) {
 		if candidate == nil {
 			log.Debug().Uint64("peer", alias).Msg("finish collecting candidates")
 			return
 		}
 
-		iceCandidateInit := candidate.ToJSON()
-		serializedCandidate, err := json.Marshal(iceCandidateInit)
-		if err != nil {
-			log.Error().Uint64("peer", alias).Err(err).Msg("cannot serialize candidate")
-			return
-		}
+		p.candidatesMux.Lock()
+		defer p.candidatesMux.Unlock()
 
-		err = state.coordinator.Send(state, &protocol.WebRtcMessage{
-			Type:    protocol.MessageType_WEBRTC_ICE_CANDIDATE,
-			Data:    serializedCandidate,
-			ToAlias: alias,
-		})
-		if err != nil {
-			log.Error().Uint64("peer", alias).Err(err).Msg("cannot send ICE candidate")
-			return
+		desc := conn.RemoteDescription()
+		if desc == nil {
+			p.pendingCandidates = append(p.pendingCandidates, candidate)
+		} else {
+			sendICECandidate(state, alias, candidate)
 		}
 	})
 
@@ -908,10 +922,17 @@ func processWebRtcControlMessage(state *State, webRtcMessage *protocol.WebRtcMes
 			p.log.Error().Err(err).Msg("error unmarshalling answer")
 			return err
 		}
+
+		p.candidatesMux.Lock()
 		if err := state.services.WebRtc.onAnswer(p.conn, answer); err != nil {
 			p.log.Error().Err(err).Msg("error settinng webrtc answer")
 			return err
 		}
+
+		for _, c := range p.pendingCandidates {
+			sendICECandidate(state, p.alias, c)
+		}
+		p.candidatesMux.Unlock()
 	case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 		p.log.Debug().Msg("ice candidate received")
 		candidate := pion.ICECandidateInit{}
@@ -1016,11 +1037,11 @@ func broadcastSubscriptionChange(state *State) error {
 		log.Debug().
 			Uint32("serverCount", serverCount).
 			Str("topics", string(topics)).
-			Msg("subscription message broadcassted")
+			Msg("subscription message broadcasted")
 	} else {
 		log.Debug().
 			Uint32("serverCount", serverCount).
-			Msg("subscription message broadcassted")
+			Msg("subscription message broadcasted")
 	}
 
 	return nil

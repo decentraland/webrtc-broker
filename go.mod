@@ -5,7 +5,7 @@ require (
 	github.com/gorilla/websocket v1.4.0
 	github.com/pion/datachannel v1.4.6
 	github.com/pion/logging v0.2.2
-	github.com/pion/webrtc/v2 v2.1.4-0.20190908174603-29c7cda364c7
+	github.com/pion/webrtc/v2 v2.1.4-0.20190911044825-6997cc792c16
 	github.com/rs/zerolog v1.14.3
 	github.com/stretchr/objx v0.1.1 // indirect
 	github.com/stretchr/testify v1.4.0
