@@ -187,8 +187,7 @@ func TestWritePump(t *testing.T) {
 		conn := &MockWebsocket{}
 		conn.
 			On("WriteMessage", msg).Return(nil).Once().
-			On("WriteMessage", msg).Return(errors.New("stop")).Once().
-			On("SetWriteDeadline", mock.Anything).Return(nil).Once()
+			On("WriteMessage", msg).Return(errors.New("stop")).Once()
 		p := makeClient(state, conn)
 		p.Alias = 1
 
@@ -205,8 +204,7 @@ func TestWritePump(t *testing.T) {
 
 		conn := &MockWebsocket{}
 		conn.
-			On("WriteMessage", msg).Return(errors.New("error")).Once().
-			On("SetWriteDeadline", mock.Anything).Return(nil).Once()
+			On("WriteMessage", msg).Return(errors.New("error")).Once()
 
 		p := makeClient(state, conn)
 		p.Alias = 1
@@ -230,7 +228,6 @@ func TestConnectCommServer(t *testing.T) {
 		On("WriteCloseMessage").Return(nil).Maybe().
 		On("SetReadLimit", mock.Anything).Return(nil).Maybe().
 		On("SetReadDeadline", mock.Anything).Return(nil).Maybe().
-		On("SetWriteDeadline", mock.Anything).Return(nil).Maybe().
 		On("SetPongHandler", mock.Anything).Maybe()
 	ConnectCommServer(state, conn)
 
@@ -252,7 +249,6 @@ func TestConnectClient(t *testing.T) {
 		On("WriteCloseMessage").Return(nil).Maybe().
 		On("SetReadLimit", mock.Anything).Return(nil).Maybe().
 		On("SetReadDeadline", mock.Anything).Return(nil).Maybe().
-		On("SetWriteDeadline", mock.Anything).Return(nil).Maybe().
 		On("SetPongHandler", mock.Anything).Maybe()
 	ConnectClient(state, conn)
 

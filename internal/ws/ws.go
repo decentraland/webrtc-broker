@@ -7,9 +7,12 @@ import (
 	_websocket "github.com/gorilla/websocket"
 )
 
+const (
+	writeWait = 10 * time.Second
+)
+
 // IWebsocket represents a websocket
 type IWebsocket interface {
-	SetWriteDeadline(t time.Time) error
 	SetReadDeadline(t time.Time) error
 	SetReadLimit(int64)
 	SetPongHandler(h func(appData string) error)
@@ -37,10 +40,6 @@ type websocket struct {
 	conn *_websocket.Conn
 }
 
-func (ws *websocket) SetWriteDeadline(t time.Time) error {
-	return ws.conn.SetWriteDeadline(t)
-}
-
 func (ws *websocket) SetReadDeadline(t time.Time) error {
 	return ws.conn.SetReadDeadline(t)
 }
@@ -58,14 +57,23 @@ func (ws *websocket) ReadMessage() (p []byte, err error) {
 }
 
 func (ws *websocket) WriteMessage(data []byte) error {
+	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
 	return ws.conn.WriteMessage(_websocket.BinaryMessage, data)
 }
 
 func (ws *websocket) WritePingMessage() error {
+	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
 	return ws.conn.WriteMessage(_websocket.PingMessage, []byte{})
 }
 
 func (ws *websocket) WriteCloseMessage() error {
+	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
 	return ws.conn.WriteMessage(_websocket.CloseMessage, []byte{})
 }
 

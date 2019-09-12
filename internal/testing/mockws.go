@@ -11,12 +11,6 @@ type MockWebsocket struct {
 	mock.Mock
 }
 
-// SetWriteDeadline sets write deadline
-func (m *MockWebsocket) SetWriteDeadline(t time.Time) error {
-	args := m.Called(t)
-	return args.Error(0)
-}
-
 // SetReadDeadline sets read deadline
 func (m *MockWebsocket) SetReadDeadline(t time.Time) error {
 	args := m.Called(t)

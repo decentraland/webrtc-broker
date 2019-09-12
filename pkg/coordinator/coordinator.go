@@ -14,7 +14,6 @@ import (
 
 const (
 	defaultReportPeriod = 30 * time.Second
-	writeWait           = 10 * time.Second
 	pongWait            = 60 * time.Second
 	pingPeriod          = 30 * time.Second
 	maxMessageSize      = 5000 // NOTE let's adjust this later
@@ -196,10 +195,6 @@ func (p *Peer) writePump(state *State) {
 	for {
 		select {
 		case bytes, ok := <-p.sendCh:
-			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.Error().Err(err).Msg("error setting write deadline")
-			}
-
 			if !ok {
 				if err := p.conn.WriteCloseMessage(); err != nil {
 					log.Debug().Err(err).Msg("error writing close message")
@@ -220,10 +215,6 @@ func (p *Peer) writePump(state *State) {
 				}
 			}
 		case <-ticker.C:
-			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.Error().Err(err).Msg("error setting write deadline")
-				return
-			}
 			if err := p.conn.WritePingMessage(); err != nil {
 				log.Error().Err(err).Msg("error writing ping message")
 				return

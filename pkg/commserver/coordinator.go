@@ -2,6 +2,7 @@ package commserver
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/internal/logging"
@@ -10,10 +11,11 @@ import (
 )
 
 const (
-	writeWait                 = 10 * time.Second
 	pongWait                  = 60 * time.Second
 	pingPeriod                = 30 * time.Second
 	maxCoordinatorMessageSize = 5000 // NOTE let's adjust this later
+	retryCount                = 5
+	retryInitialPeriod        = 1 * time.Second
 )
 
 type coordinator struct {
@@ -32,16 +34,26 @@ func (c *coordinator) Connect(state *State) error {
 		return err
 	}
 
-	conn, err := ws.Dial(url)
+	retryPeriod := retryInitialPeriod
+	for retryIndex := 0; retryIndex < retryCount; retryIndex++ {
+		conn, err := ws.Dial(url)
+		if err == nil {
+			c.conn = conn
+			return nil
+		}
 
-	if err != nil {
 		c.log.Error().Str("url", c.url).Err(err).Msg("cannot connect to coordinator node")
-		return err
+		if (retryIndex + 1) < retryCount {
+			c.log.Debug().
+				Str("retry", retryPeriod.String()).
+				Msg("wait before retrying coordinator connection")
+			time.Sleep(retryPeriod)
+		}
+
+		retryPeriod *= 5
 	}
 
-	c.conn = conn
-
-	return nil
+	return fmt.Errorf("cannot connect to coordinator after %d retries", retryCount)
 }
 
 func (c *coordinator) Send(state *State, msg protocol.Message) error {
@@ -138,11 +150,6 @@ func (c *coordinator) writePump(_ *State) {
 	for {
 		select {
 		case bytes, ok := <-c.send:
-			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.Error().Err(err).Msg("error setting write deadline")
-				return
-			}
-
 			if !ok {
 				if err := c.conn.WriteCloseMessage(); err != nil {
 					log.Debug().Err(err).Msg("error sending write close message")
@@ -165,11 +172,6 @@ func (c *coordinator) writePump(_ *State) {
 				}
 			}
 		case <-ticker.C:
-			if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-				log.Error().Err(err).Msg("error setting write deadline")
-				return
-			}
-
 			if err := c.conn.WritePingMessage(); err != nil {
 				log.Error().Err(err).Msg("error writing ping message")
 				return

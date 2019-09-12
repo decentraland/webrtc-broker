@@ -324,8 +324,7 @@ func TestCoordinatorWritePump(t *testing.T) {
 	conn.
 		On("Close").Return(nil).
 		On("WriteMessage", msg).Return(nil).Once().
-		On("WriteMessage", msg).Return(errors.New("stop")).Once().
-		On("SetWriteDeadline", mock.Anything).Return(nil).Once()
+		On("WriteMessage", msg).Return(errors.New("stop")).Once()
 
 	state.coordinator.conn = conn
 
