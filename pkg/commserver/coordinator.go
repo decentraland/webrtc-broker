@@ -193,7 +193,6 @@ func (c *coordinator) Close() {
 	close(c.send)
 
 	if c.exitOnClose {
-		// TODO reconnect with circuit breaker instead
 		c.log.Fatal().Msg("Coordinator connection closed, exiting process")
 	}
 }
