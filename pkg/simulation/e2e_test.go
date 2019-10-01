@@ -24,6 +24,10 @@ const (
 	longSleepPeriod = 15 * time.Second
 )
 
+var testLogLevel = zerolog.InfoLevel
+var clientLogLevel = zerolog.WarnLevel
+var serverLogLevel = zerolog.WarnLevel
+
 type PeerWriter = commserver.PeerWriter
 type WriterController = commserver.WriterController
 
@@ -105,7 +109,7 @@ func startCommServer(t *testing.T, config *commserver.Config) (*commserver.State
 	}
 
 	config.Auth = &authentication.NoopAuthenticator{}
-	log := logging.New().Level(zerolog.DebugLevel)
+	log := logging.New().Level(serverLogLevel)
 	config.Log = &log
 	config.ReportPeriod = 1 * time.Second
 	config.Reporter = func(stats commserver.Stats) { reporter.Report(stats) }
@@ -133,7 +137,7 @@ type recvMessage struct {
 	raw     []byte
 }
 
-func TestGeneralExchange(t *testing.T) {
+func TestMeshTopology(t *testing.T) {
 	_, server, coordinatorURL := startCoordinator(t, "localhost:9999")
 	defer server.Close()
 
@@ -164,7 +168,7 @@ func TestGeneralExchange(t *testing.T) {
 				c1ReceivedUnreliable <- m
 			}
 		},
-		Log: logging.New().Level(zerolog.WarnLevel),
+		Log: logging.New().Level(clientLogLevel),
 	}
 	c1 := MakeClient(&config)
 
@@ -181,11 +185,11 @@ func TestGeneralExchange(t *testing.T) {
 				c2ReceivedUnreliable <- m
 			}
 		},
-		Log: logging.New().Level(zerolog.WarnLevel),
+		Log: logging.New().Level(clientLogLevel),
 	}
 	c2 := MakeClient(&config)
 
-	log := logging.New().Level(zerolog.DebugLevel)
+	log := logging.New().Level(testLogLevel)
 
 	printTitle("Starting client1")
 	c1Data := start(t, c1)
@@ -361,14 +365,14 @@ func TestControlFlow(t *testing.T) {
 		config := Config{
 			Auth:           auth,
 			CoordinatorURL: coordinatorURL,
-			Log:            logging.New().Level(zerolog.WarnLevel),
+			Log:            logging.New().Level(clientLogLevel),
 		}
 		s.c1 = MakeClient(&config)
 
 		config = Config{
 			Auth:           auth,
 			CoordinatorURL: coordinatorURL,
-			Log:            logging.New().Level(zerolog.WarnLevel),
+			Log:            logging.New().Level(clientLogLevel),
 		}
 		s.c2 = MakeClient(&config)
 
