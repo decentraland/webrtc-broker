@@ -208,7 +208,13 @@ func (p *Peer) writePump(state *State) {
 
 			n := len(p.sendCh)
 			for i := 0; i < n; i++ {
-				bytes = <-p.sendCh
+				bytes, ok = <-p.sendCh
+				if !ok {
+					if err := p.conn.WriteCloseMessage(); err != nil {
+						log.Debug().Err(err).Msg("error writing close message")
+					}
+					return
+				}
 				if err := p.conn.WriteMessage(bytes); err != nil {
 					log.Error().Err(err).Msg("error writing message")
 					return
