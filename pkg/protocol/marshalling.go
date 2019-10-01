@@ -1,3 +1,4 @@
+// Package protocol contains the communications protocol protobuffer definition
 package protocol
 
 import "github.com/golang/protobuf/proto"

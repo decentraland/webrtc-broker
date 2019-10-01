@@ -1,3 +1,4 @@
+// Package commserver contains the communication server definition
 package commserver
 
 import (

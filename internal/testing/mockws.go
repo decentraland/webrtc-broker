@@ -1,3 +1,4 @@
+// Package testing contains internal testing utilities
 package testing
 
 import (

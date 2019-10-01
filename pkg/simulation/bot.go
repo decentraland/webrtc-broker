@@ -1,3 +1,4 @@
+// Package simulation contains utilities for simulating clients
 package simulation
 
 import (

@@ -1,3 +1,4 @@
+// Package ws contains websocket operations
 package ws
 
 import (
@@ -43,6 +44,7 @@ type websocket struct {
 func (ws *websocket) SetReadDeadline(t time.Time) error {
 	return ws.conn.SetReadDeadline(t)
 }
+
 func (ws *websocket) SetReadLimit(l int64) {
 	ws.conn.SetReadLimit(l)
 }

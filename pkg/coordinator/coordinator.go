@@ -1,3 +1,4 @@
+// Package coordinator contains the coordinator definition
 package coordinator
 
 import (

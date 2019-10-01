@@ -1,3 +1,4 @@
+// Package authentication defines interfaces for coordinator and communication server authentication
 package authentication
 
 import (
