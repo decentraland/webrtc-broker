@@ -9,6 +9,7 @@ linters:
   disable:
     - dupl
     - funlen
+    - gocognit
 
 issues:
   exclude-use-default: false

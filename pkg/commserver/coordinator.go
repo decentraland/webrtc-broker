@@ -28,7 +28,7 @@ type coordinator struct {
 }
 
 func (c *coordinator) Connect(state *State) error {
-	url, err := state.services.Auth.GenerateServerConnectURL(c.url)
+	url, err := state.services.Auth.GenerateServerConnectURL(c.url, state.role)
 	if err != nil {
 		c.log.Error().Err(err).Msg("error generating communication server auth url")
 		return err

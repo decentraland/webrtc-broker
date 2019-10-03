@@ -12,7 +12,7 @@ import (
 type ServerAuthenticator interface {
 	AuthenticateFromMessage(role protocol.Role, bytes []byte) (bool, []byte, error)
 	GenerateServerAuthMessage() (*protocol.AuthMessage, error)
-	GenerateServerConnectURL(coordinatorURL string) (string, error)
+	GenerateServerConnectURL(coordinatorURL string, role protocol.Role) (string, error)
 }
 
 // CoordinatorAuthenticator is the coordinator authentication mechanism
@@ -58,8 +58,8 @@ func (a *NoopAuthenticator) GenerateClientAuthMessage() (*protocol.AuthMessage, 
 }
 
 // GenerateServerConnectURL generates CoordinatorURL with no parameters
-func (a *NoopAuthenticator) GenerateServerConnectURL(coordinatorURL string) (string, error) {
-	u := fmt.Sprintf("%s/discover", coordinatorURL)
+func (a *NoopAuthenticator) GenerateServerConnectURL(coordinatorURL string, role protocol.Role) (string, error) {
+	u := fmt.Sprintf("%s/discover?role=%s", coordinatorURL, role.String())
 	return u, nil
 }
 

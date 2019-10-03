@@ -33,8 +33,8 @@ func (m *mockServerAuthenticator) GenerateServerAuthMessage() (*protocol.AuthMes
 	return args.Get(0).(*protocol.AuthMessage), args.Error(1)
 }
 
-func (m *mockServerAuthenticator) GenerateServerConnectURL(coordinatorURL string) (string, error) {
-	args := m.Called(coordinatorURL)
+func (m *mockServerAuthenticator) GenerateServerConnectURL(coordinatorURL string, role protocol.Role) (string, error) {
+	args := m.Called(coordinatorURL, role)
 	return args.String(0), args.Error(1)
 }
 
@@ -154,6 +154,7 @@ func makeTestServices(webRtc *mockWebRtc) services {
 
 func makeTestConfigWithWebRtc(auth authentication.ServerAuthenticator, webRtc *mockWebRtc) *Config {
 	config := &Config{
+		Role:                    protocol.Role_COMMUNICATION_SERVER,
 		Auth:                    auth,
 		EstablishSessionTimeout: 1 * time.Second,
 		WebRtc:                  webRtc,
@@ -905,8 +906,6 @@ func TestReadReliablePump(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(peerMessage.rawMsgToClient, &topicFWMessage))
 		require.Equal(t, uint64(3), topicFWMessage.FromAlias)
 		require.Equal(t, []byte("body"), topicFWMessage.Body)
-
-		require.Empty(t, peerMessage.rawMsgToServer)
 	})
 
 	t.Run("topic identity message (client)", func(t *testing.T) {

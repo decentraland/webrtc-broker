@@ -31,9 +31,9 @@ var ErrUnauthorized = errors.New("unauthorized")
 
 // IServerSelector is in charge of tracking and processing the server list
 type IServerSelector interface {
-	ServerRegistered(server *Peer)
-	ServerUnregistered(server *Peer)
-	GetServerAliasList(forPeer *Peer) []uint64
+	ServerRegistered(role protocol.Role, alias uint64)
+	ServerUnregistered(alias uint64)
+	GetServerAliasList(forRole protocol.Role) []uint64
 	GetServerCount() int
 }
 
@@ -43,30 +43,31 @@ type DefaultServerSelector struct {
 }
 
 // ServerRegistered register a new server
-func (r *DefaultServerSelector) ServerRegistered(server *Peer) {
-	r.ServerAliases[server.Alias] = true
+func (r *DefaultServerSelector) ServerRegistered(role protocol.Role, alias uint64) {
+	r.ServerAliases[alias] = true
 }
 
 // ServerUnregistered removes an unregistered server from the list
-func (r *DefaultServerSelector) ServerUnregistered(server *Peer) {
-	delete(r.ServerAliases, server.Alias)
+func (r *DefaultServerSelector) ServerUnregistered(alias uint64) {
+	delete(r.ServerAliases, alias)
 }
 
-type byAlias []uint64
+// ByAlias is a utility to sort peers by alias
+type ByAlias []uint64
 
-func (a byAlias) Len() int           { return len(a) }
-func (a byAlias) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a byAlias) Less(i, j int) bool { return a[i] < a[j] }
+func (a ByAlias) Len() int           { return len(a) }
+func (a ByAlias) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByAlias) Less(i, j int) bool { return a[i] < a[j] }
 
 // GetServerAliasList returns a list of tracked server aliases
-func (r *DefaultServerSelector) GetServerAliasList(forPeer *Peer) []uint64 {
+func (r *DefaultServerSelector) GetServerAliasList(role protocol.Role) []uint64 {
 	peers := make([]uint64, 0, len(r.ServerAliases))
 
 	for alias := range r.ServerAliases {
 		peers = append(peers, alias)
 	}
 
-	sort.Sort(byAlias(peers))
+	sort.Sort(ByAlias(peers))
 
 	return peers
 }
@@ -89,7 +90,7 @@ type Peer struct {
 	conn     ws.IWebsocket
 	sendCh   chan []byte
 	isClosed bool
-	isServer bool
+	role     protocol.Role
 	log      logging.Logger
 }
 
@@ -161,17 +162,14 @@ func MakeState(config *Config) *State {
 	}
 }
 
-func makePeer(state *State, conn ws.IWebsocket, isServer bool) *Peer {
+func makePeer(state *State, conn ws.IWebsocket, role protocol.Role) *Peer {
 	return &Peer{
-		conn:     conn,
-		sendCh:   make(chan []byte, 256),
-		isServer: isServer,
-		log:      state.log,
+		conn:   conn,
+		sendCh: make(chan []byte, 256),
+		role:   role,
+		log:    state.log,
 	}
 }
-
-func makeClient(state *State, conn ws.IWebsocket) *Peer     { return makePeer(state, conn, false) }
-func makeCommServer(state *State, conn ws.IWebsocket) *Peer { return makePeer(state, conn, true) }
 
 func (p *Peer) send(state *State, msg protocol.Message) error {
 	log := state.log
@@ -342,10 +340,10 @@ func closeState(state *State) {
 }
 
 // ConnectCommServer establish a ws connection to a communication server
-func ConnectCommServer(state *State, conn ws.IWebsocket) {
+func ConnectCommServer(state *State, conn ws.IWebsocket, role protocol.Role) {
 	log := state.log
 	log.Info().Msg("socket connect (server)")
-	p := makeCommServer(state, conn)
+	p := makePeer(state, conn, role)
 	state.registerCommServer <- p
 	go readPump(state, p)
 	go p.writePump(state)
@@ -355,7 +353,7 @@ func ConnectCommServer(state *State, conn ws.IWebsocket) {
 func ConnectClient(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info().Msg("socket connect (client)")
-	p := makeClient(state, conn)
+	p := makePeer(state, conn, protocol.Role_CLIENT)
 	state.registerClient <- p
 	go readPump(state, p)
 	go p.writePump(state)
@@ -432,14 +430,21 @@ func Start(state *State) {
 // Register coordinator endpoints for server discovery and client connect
 func Register(state *State, mux *http.ServeMux) {
 	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
+		qs := r.URL.Query()
+		role := protocol.Role_COMMUNICATION_SERVER
+
+		if qs.Get("role") == protocol.Role_COMMUNICATION_SERVER_HUB.String() {
+			role = protocol.Role_COMMUNICATION_SERVER_HUB
+		}
+
+		ws, err := UpgradeRequest(state, role, w, r)
 
 		if err != nil {
 			state.log.Error().Err(err).Msg("socket connect error (discovery)")
 			return
 		}
 
-		ConnectCommServer(state, ws)
+		ConnectCommServer(state, ws, role)
 	})
 
 	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
@@ -459,10 +464,10 @@ func registerCommServer(state *State, p *Peer) error {
 	alias := state.LastPeerAlias
 	p.Alias = alias
 
-	servers := state.serverSelector.GetServerAliasList(p)
+	servers := state.serverSelector.GetServerAliasList(p.role)
 
 	state.Peers[alias] = p
-	state.serverSelector.ServerRegistered(p)
+	state.serverSelector.ServerRegistered(p.role, p.Alias)
 
 	msg := &protocol.WelcomeMessage{
 		Type:             protocol.MessageType_WELCOME,
@@ -478,7 +483,7 @@ func registerClient(state *State, p *Peer) error {
 	alias := state.LastPeerAlias
 	p.Alias = alias
 
-	servers := state.serverSelector.GetServerAliasList(p)
+	servers := state.serverSelector.GetServerAliasList(p.role)
 
 	state.Peers[alias] = p
 
@@ -498,8 +503,14 @@ func registerClient(state *State, p *Peer) error {
 func unregister(state *State, p *Peer) {
 	delete(state.Peers, p.Alias)
 
-	if p.isServer {
-		state.serverSelector.ServerUnregistered(p)
+	switch p.role {
+	case protocol.Role_CLIENT:
+	case protocol.Role_COMMUNICATION_SERVER:
+		state.serverSelector.ServerUnregistered(p.Alias)
+	case protocol.Role_COMMUNICATION_SERVER_HUB:
+		state.serverSelector.ServerUnregistered(p.Alias)
+	default:
+		panic("unhandled role in unregister")
 	}
 }
 

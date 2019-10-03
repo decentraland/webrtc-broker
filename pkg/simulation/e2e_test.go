@@ -5,6 +5,7 @@ package simulation
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"testing"
 	"time"
 
@@ -37,24 +38,31 @@ func printTitle(log zerolog.Logger, title string) {
 }
 
 func startCoordinator(t *testing.T, addr string) (*coordinator.State, *http.Server, string) {
+	config := &coordinator.Config{}
+	return startCoordinatorWithConfig(t, addr, config)
+}
+
+func startCoordinatorWithConfig(t *testing.T, addr string, config *coordinator.Config) (*coordinator.State, *http.Server, string) {
 	log := logging.New().Level(coordinatorLogLevel)
-	auth := &authentication.NoopAuthenticator{}
-	config := coordinator.Config{
-		ServerSelector: &coordinator.DefaultServerSelector{
-			ServerAliases: make(map[uint64]bool),
-		},
-		Auth: auth,
-		Log:  &log,
-	}
-	state := coordinator.MakeState(&config)
+	config.Auth = &authentication.NoopAuthenticator{}
+	config.Log = &log
+
+	state := coordinator.MakeState(config)
 
 	go coordinator.Start(state)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/discover", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := coordinator.UpgradeRequest(state, protocol.Role_COMMUNICATION_SERVER, w, r)
+		qs := r.URL.Query()
+		role := protocol.Role_COMMUNICATION_SERVER
+
+		if qs.Get("role") == protocol.Role_COMMUNICATION_SERVER_HUB.String() {
+			role = protocol.Role_COMMUNICATION_SERVER_HUB
+		}
+
+		ws, err := coordinator.UpgradeRequest(state, role, w, r)
 		require.NoError(t, err)
-		coordinator.ConnectCommServer(state, ws)
+		coordinator.ConnectCommServer(state, ws, role)
 	})
 
 	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +112,8 @@ func (r *testReporter) GetStateSnapshot() commServerSnapshot {
 	return <-r.Data
 }
 
-func startCommServer(t *testing.T, coordinatorURL string) (*commserver.State, *testReporter) {
-	config := &commserver.Config{CoordinatorURL: coordinatorURL}
+func startCommServer(t *testing.T, coordinatorURL string, role protocol.Role) (*commserver.State, *testReporter) {
+	config := &commserver.Config{CoordinatorURL: coordinatorURL, Role: role}
 	return startCommServerWithConfig(t, config)
 }
 
@@ -168,12 +176,10 @@ func TestSingleServerTopology(t *testing.T) {
 	_, server, coordinatorURL := startCoordinator(t, "localhost:9997")
 	defer server.Close()
 
-	topicFWMessage := protocol.TopicFWMessage{}
-
 	log := logging.New().Level(testLogLevel)
 
 	printTitle(log, "Starting comm servers")
-	server1State, server1Reporter := startCommServer(t, coordinatorURL)
+	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
 	defer commserver.Shutdown(server1State)
 
 	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
@@ -201,7 +207,8 @@ func TestSingleServerTopology(t *testing.T) {
 	log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
 
 	printTitle(log, "Connections")
-	fmt.Println(server1Snapshot.Peers)
+	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
+	require.Contains(t, server1Snapshot.Peers, c2Data.Alias)
 
 	printTitle(log, "Authorizing clients")
 	authMessage := protocol.AuthMessage{
@@ -248,6 +255,8 @@ func TestSingleServerTopology(t *testing.T) {
 	time.Sleep(longSleepPeriod)
 	require.Len(t, c1ReceivedReliable, 1)
 	require.Len(t, c2ReceivedReliable, 1)
+
+	topicFWMessage := protocol.TopicFWMessage{}
 
 	recvMsg := <-c1ReceivedReliable
 	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
@@ -324,15 +333,13 @@ func TestMeshTopology(t *testing.T) {
 	_, server, coordinatorURL := startCoordinator(t, "localhost:9998")
 	defer server.Close()
 
-	topicFWMessage := protocol.TopicFWMessage{}
-
 	log := logging.New().Level(testLogLevel)
 
 	printTitle(log, "Starting comm servers")
-	server1State, server1Reporter := startCommServer(t, coordinatorURL)
+	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
 	defer commserver.Shutdown(server1State)
 
-	server2State, server2Reporter := startCommServer(t, coordinatorURL)
+	server2State, server2Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
 	defer commserver.Shutdown(server2State)
 
 	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
@@ -363,8 +370,10 @@ func TestMeshTopology(t *testing.T) {
 	log.Info().Msgf("commserver2 alias is %d", server2Snapshot.Alias)
 
 	printTitle(log, "Connections")
-	fmt.Println(server1Snapshot.Peers)
-	fmt.Println(server2Snapshot.Peers)
+	require.Contains(t, server1Snapshot.Peers, server2Snapshot.Alias)
+	require.Contains(t, server2Snapshot.Peers, server1Snapshot.Alias)
+	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
+	require.Contains(t, server2Snapshot.Peers, c2Data.Alias)
 
 	printTitle(log, "Authorizing clients")
 	authMessage := protocol.AuthMessage{
@@ -412,6 +421,8 @@ func TestMeshTopology(t *testing.T) {
 	time.Sleep(longSleepPeriod)
 	require.Len(t, c1ReceivedReliable, 1)
 	require.Len(t, c2ReceivedReliable, 1)
+
+	topicFWMessage := protocol.TopicFWMessage{}
 
 	recvMsg := <-c1ReceivedReliable
 	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
@@ -484,6 +495,190 @@ func TestMeshTopology(t *testing.T) {
 	log.Info().Msg("TEST END")
 }
 
+type starTopologyServerSelector struct {
+	HubAlias      uint64
+	ServerAliases map[uint64]bool
+}
+
+func (s *starTopologyServerSelector) ServerRegistered(role protocol.Role, alias uint64) {
+	if role == protocol.Role_COMMUNICATION_SERVER_HUB {
+		s.HubAlias = alias
+	} else {
+		s.ServerAliases[alias] = true
+	}
+}
+
+func (s *starTopologyServerSelector) GetServerAliasList(forRole protocol.Role) []uint64 {
+	if forRole == protocol.Role_CLIENT || forRole == protocol.Role_COMMUNICATION_SERVER_HUB {
+		peers := make([]uint64, 0, len(s.ServerAliases))
+
+		for alias := range s.ServerAliases {
+			peers = append(peers, alias)
+		}
+
+		sort.Sort(coordinator.ByAlias(peers))
+		return peers
+	}
+
+	if forRole == protocol.Role_COMMUNICATION_SERVER && s.HubAlias > 0 {
+		peers := make([]uint64, 1)
+		peers[0] = s.HubAlias
+		return peers
+	}
+
+	return []uint64{}
+}
+
+func (s *starTopologyServerSelector) ServerUnregistered(alias uint64) {
+}
+
+func (s *starTopologyServerSelector) GetServerCount() int {
+	count := len(s.ServerAliases)
+	if s.HubAlias > 0 {
+		count++
+	}
+	return count
+}
+
+func TestStarTopology(t *testing.T) {
+	config := &coordinator.Config{}
+	config.ServerSelector = &starTopologyServerSelector{
+		ServerAliases: make(map[uint64]bool),
+	}
+	_, server, coordinatorURL := startCoordinatorWithConfig(t, "localhost:9998", config)
+	defer server.Close()
+
+	log := logging.New().Level(testLogLevel)
+
+	printTitle(log, "Starting comm servers")
+	hubServerState, hubServerReporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER_HUB)
+	defer commserver.Shutdown(hubServerState)
+
+	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer commserver.Shutdown(server1State)
+
+	server2State, server2Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer commserver.Shutdown(server2State)
+
+	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
+	c2, c2ReceivedReliable, c2ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
+
+	printTitle(log, "Starting client1")
+	c1Data := start(t, c1)
+	require.NoError(t, c1.Connect(c1Data.Alias, c1Data.AvailableServers[0]))
+	log.Info().Msgf("client1 alias is %d", c1Data.Alias)
+
+	printTitle(log, "Starting client2")
+	c2Data := start(t, c2)
+	require.NoError(t, c2.Connect(c2Data.Alias, c2Data.AvailableServers[1]))
+	log.Info().Msgf("client2 alias is %d", c2Data.Alias)
+
+	// NOTE: wait until connections are ready
+	time.Sleep(sleepPeriod)
+
+	hubServerSnapshot := hubServerReporter.GetStateSnapshot()
+	server1Snapshot := server1Reporter.GetStateSnapshot()
+	server2Snapshot := server2Reporter.GetStateSnapshot()
+	require.NotEmpty(t, server1Snapshot.Alias)
+	require.NotEmpty(t, server2Snapshot.Alias)
+	require.NotEmpty(t, c1Data.Alias)
+	require.NotEmpty(t, c2Data.Alias)
+	require.Equal(t, 4, len(server1Snapshot.Peers)+len(server2Snapshot.Peers))
+
+	log.Info().Msgf("commserver hub alias is %d", hubServerSnapshot.Alias)
+	log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
+	log.Info().Msgf("commserver2 alias is %d", server2Snapshot.Alias)
+
+	printTitle(log, "Connections")
+	require.Contains(t, server1Snapshot.Peers, hubServerSnapshot.Alias)
+	require.Contains(t, server2Snapshot.Peers, hubServerSnapshot.Alias)
+	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
+	require.Contains(t, server2Snapshot.Peers, c2Data.Alias)
+
+	printTitle(log, "Authorizing clients")
+	authMessage := protocol.AuthMessage{
+		Type: protocol.MessageType_AUTH,
+		Role: protocol.Role_CLIENT,
+	}
+	authBytes, err := proto.Marshal(&authMessage)
+	require.NoError(t, err)
+
+	c1.authMessage <- authBytes
+	c2.authMessage <- authBytes
+
+	// NOTE: wait until connections are authenticated
+	time.Sleep(longSleepPeriod)
+	// server1Snapshot = server1Reporter.GetStateSnapshot()
+	// server2Snapshot = server2Reporter.GetStateSnapshot()
+
+	printTitle(log, "Both clients are subscribing to 'test' topic")
+	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
+	require.NoError(t, c2.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
+
+	// NOTE: wait until subscriptions are ready
+	time.Sleep(longSleepPeriod)
+
+	printTitle(log, "Each client sends a topic message, by reliable channel")
+	msg := protocol.TopicMessage{
+		Type:  protocol.MessageType_TOPIC,
+		Topic: "test",
+		Body:  []byte("c1 test"),
+	}
+	c1EncodedMessage, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+	c1.SendReliable <- c1EncodedMessage
+
+	msg = protocol.TopicMessage{
+		Type:  protocol.MessageType_TOPIC,
+		Topic: "test",
+		Body:  []byte("c2 test"),
+	}
+	c2EncodedMessage, err := proto.Marshal(&msg)
+	require.NoError(t, err)
+	c2.SendReliable <- c2EncodedMessage
+
+	// NOTE wait until messages are received
+	time.Sleep(longSleepPeriod)
+	require.Len(t, c1ReceivedReliable, 1)
+	require.Len(t, c2ReceivedReliable, 1)
+
+	topicFWMessage := protocol.TopicFWMessage{}
+
+	recvMsg := <-c1ReceivedReliable
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c2 test"), topicFWMessage.Body)
+	require.Equal(t, c2Data.Alias, topicFWMessage.FromAlias)
+
+	recvMsg = <-c2ReceivedReliable
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
+	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
+
+	printTitle(log, "Each client sends a topic message, by unreliable channel")
+	c1.SendUnreliable <- c1EncodedMessage
+	c2.SendUnreliable <- c2EncodedMessage
+
+	time.Sleep(longSleepPeriod)
+	require.Len(t, c1ReceivedUnreliable, 1)
+	require.Len(t, c2ReceivedUnreliable, 1)
+
+	recvMsg = <-c1ReceivedUnreliable
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c2 test"), topicFWMessage.Body)
+	require.Equal(t, c2Data.Alias, topicFWMessage.FromAlias)
+
+	recvMsg = <-c2ReceivedUnreliable
+	require.Equal(t, protocol.MessageType_TOPIC_FW, recvMsg.msgType)
+	require.NoError(t, proto.Unmarshal(recvMsg.raw, &topicFWMessage))
+	require.Equal(t, []byte("c1 test"), topicFWMessage.Body)
+	require.Equal(t, c1Data.Alias, topicFWMessage.FromAlias)
+
+	log.Info().Msg("TEST END")
+}
+
 type session struct {
 	coordinator *http.Server
 
@@ -502,6 +697,7 @@ func TestControlFlow(t *testing.T) {
 
 		printTitle(log, "Starting comm server")
 		commConfig.CoordinatorURL = coordinatorURL
+		commConfig.Role = protocol.Role_COMMUNICATION_SERVER
 		commserverState, commReporter := startCommServerWithConfig(t, commConfig)
 		s.commServerState = commserverState
 		s.commServerReporter = commReporter

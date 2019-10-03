@@ -4,6 +4,7 @@ package commserver
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -77,13 +78,10 @@ func (ts *topicSubscriptions) AddClientSubscription(topic string, client *peer) 
 		return false
 	}
 
-	s = &topicSubscription{
-		clients: make([]*peer, 1),
+	(*ts)[topic] = &topicSubscription{
+		clients: []*peer{client},
 		servers: make([]*peer, 0),
 	}
-
-	s.clients[0] = client
-	(*ts)[topic] = s
 
 	return true
 }
@@ -96,13 +94,10 @@ func (ts *topicSubscriptions) AddServerSubscription(topic string, server *peer) 
 		return false
 	}
 
-	s = &topicSubscription{
+	(*ts)[topic] = &topicSubscription{
 		clients: make([]*peer, 0),
-		servers: make([]*peer, 1),
+		servers: []*peer{server},
 	}
-
-	s.servers[0] = server
-	(*ts)[topic] = s
 
 	return true
 }
@@ -187,6 +182,7 @@ type Config struct {
 	Reporter                func(stats Stats)
 	ICEServers              []ICEServer
 	ExitOnCoordinatorClose  bool
+	Role                    protocol.Role
 
 	ReliableWriterControllerFactory             WriterControllerFactory
 	UnreliableWriterControllerFactory           WriterControllerFactory
@@ -196,6 +192,7 @@ type Config struct {
 
 // State is the commm server state
 type State struct {
+	role                    protocol.Role
 	reporter                func(stats Stats)
 	services                services
 	coordinator             *coordinator
@@ -221,6 +218,11 @@ type State struct {
 
 // MakeState creates a new communication server state
 func MakeState(config *Config) (*State, error) {
+	if config.Role != protocol.Role_COMMUNICATION_SERVER &&
+		config.Role != protocol.Role_COMMUNICATION_SERVER_HUB {
+		return nil, fmt.Errorf("invalid server role %s", config.Role.String())
+	}
+
 	establishSessionTimeout := config.EstablishSessionTimeout
 	if establishSessionTimeout.Seconds() == 0 {
 		establishSessionTimeout = 1 * time.Minute
@@ -257,6 +259,7 @@ func MakeState(config *Config) (*State, error) {
 	}
 
 	state := &State{
+		role:     config.Role,
 		services: ss,
 		coordinator: &coordinator{
 			log:         ss.Log,
@@ -746,28 +749,28 @@ func processUnregister(state *State, p *peer) error {
 	state.peers = state.peers[:size-1]
 	p.index = -1
 
-	if p.role == protocol.Role_COMMUNICATION_SERVER {
-		state.subscriptionsLock.Lock()
-		for topic := range p.topics {
-			state.subscriptions.RemoveServerSubscription(topic, p)
-		}
-		state.subscriptionsLock.Unlock()
-	} else {
-		topicsChanged := false
+	topicsChanged := false
 
-		state.subscriptionsLock.Lock()
+	state.subscriptionsLock.Lock()
+	if p.role == protocol.Role_COMMUNICATION_SERVER {
+		for topic := range p.topics {
+			if state.subscriptions.RemoveServerSubscription(topic, p) &&
+				state.role == protocol.Role_COMMUNICATION_SERVER_HUB {
+				topicsChanged = true
+			}
+		}
+	} else {
 		for topic := range p.topics {
 			if state.subscriptions.RemoveClientSubscription(topic, p) {
 				topicsChanged = true
 			}
 		}
-		state.subscriptionsLock.Unlock()
-
-		if topicsChanged {
-			return broadcastSubscriptionChange(state)
-		}
 	}
+	state.subscriptionsLock.Unlock()
 
+	if topicsChanged {
+		return broadcastSubscriptionChange(state)
+	}
 	return nil
 }
 
@@ -842,6 +845,9 @@ func processSubscriptionChange(state *State, change topicChange) error {
 			state.subscriptionsLock.Lock()
 			if p.role == protocol.Role_COMMUNICATION_SERVER {
 				state.subscriptions.AddServerSubscription(topic, p)
+				if state.role == protocol.Role_COMMUNICATION_SERVER_HUB {
+					topicsChanged = true
+				}
 			} else if state.subscriptions.AddClientSubscription(topic, p) {
 				topicsChanged = true
 			}
@@ -862,7 +868,10 @@ func processSubscriptionChange(state *State, change topicChange) error {
 
 		state.subscriptionsLock.Lock()
 		if p.role == protocol.Role_COMMUNICATION_SERVER {
-			state.subscriptions.RemoveServerSubscription(topic, p)
+			if state.subscriptions.RemoveServerSubscription(topic, p) &&
+				state.role == protocol.Role_COMMUNICATION_SERVER_HUB {
+				topicsChanged = true
+			}
 		} else if state.subscriptions.RemoveClientSubscription(topic, p) {
 			topicsChanged = true
 		}
@@ -981,8 +990,11 @@ func processTopicMessage(state *State, msg *peerMessage) {
 	}
 
 	var serverCount uint32
-	if !fromServer && msg.rawMsgToServer != nil {
+	if !fromServer || state.role == protocol.Role_COMMUNICATION_SERVER_HUB {
 		for _, p := range subscription.servers {
+			if p == msg.from {
+				continue
+			}
 			serverCount++
 			rawMsg := msg.rawMsgToServer
 			if reliable {
@@ -1036,11 +1048,13 @@ func broadcastSubscriptionChange(state *State) error {
 
 	if verbose {
 		log.Debug().
+			Uint64("serverAlias", state.alias).
 			Uint32("serverCount", serverCount).
 			Str("topics", string(topics)).
 			Msg("subscription message broadcasted")
 	} else {
 		log.Debug().
+			Uint64("serverAlias", state.alias).
 			Uint32("serverCount", serverCount).
 			Msg("subscription message broadcasted")
 	}

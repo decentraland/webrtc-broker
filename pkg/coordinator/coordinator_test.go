@@ -102,7 +102,7 @@ func TestReadPump(t *testing.T) {
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeCommServer(state, conn)
+		p := makePeer(state, conn, protocol.Role_COMMUNICATION_SERVER)
 		p.Alias = 1
 
 		msg := &protocol.WebRtcMessage{
@@ -144,7 +144,7 @@ func TestReadPump(t *testing.T) {
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeCommServer(state, conn)
+		p := makePeer(state, conn, protocol.Role_COMMUNICATION_SERVER)
 		p.Alias = 1
 
 		msg := &protocol.ConnectMessage{
@@ -188,7 +188,7 @@ func TestWritePump(t *testing.T) {
 		conn.
 			On("WriteMessage", msg).Return(nil).Once().
 			On("WriteMessage", msg).Return(errors.New("stop")).Once()
-		p := makeClient(state, conn)
+		p := makePeer(state, conn, protocol.Role_CLIENT)
 		p.Alias = 1
 
 		p.sendCh <- msg
@@ -206,7 +206,7 @@ func TestWritePump(t *testing.T) {
 		conn.
 			On("WriteMessage", msg).Return(errors.New("error")).Once()
 
-		p := makeClient(state, conn)
+		p := makePeer(state, conn, protocol.Role_CLIENT)
 		p.Alias = 1
 
 		p.sendCh <- msg
@@ -218,24 +218,34 @@ func TestWritePump(t *testing.T) {
 }
 
 func TestConnectCommServer(t *testing.T) {
-	state := makeTestState()
-	defer closeState(state)
+	forRole := func(t *testing.T, role protocol.Role) {
+		state := makeTestState()
+		defer closeState(state)
 
-	conn := &MockWebsocket{}
-	conn.
-		On("Close").Return(nil).Once().
-		On("ReadMessage").Return([]byte{}, nil).Maybe().
-		On("WriteCloseMessage").Return(nil).Maybe().
-		On("SetReadLimit", mock.Anything).Return(nil).Maybe().
-		On("SetReadDeadline", mock.Anything).Return(nil).Maybe().
-		On("SetPongHandler", mock.Anything).Maybe()
-	ConnectCommServer(state, conn)
+		conn := &MockWebsocket{}
+		conn.
+			On("Close").Return(nil).Once().
+			On("ReadMessage").Return([]byte{}, nil).Maybe().
+			On("WriteCloseMessage").Return(nil).Maybe().
+			On("SetReadLimit", mock.Anything).Return(nil).Maybe().
+			On("SetReadDeadline", mock.Anything).Return(nil).Maybe().
+			On("SetPongHandler", mock.Anything).Maybe()
+		ConnectCommServer(state, conn, role)
 
-	p := <-state.registerCommServer
-	p.close()
+		p := <-state.registerCommServer
+		p.close()
 
-	require.Equal(t, p.isServer, true)
-	conn.AssertExpectations(t)
+		require.Equal(t, p.role, role)
+		conn.AssertExpectations(t)
+	}
+
+	t.Run("communication server role", func(t *testing.T) {
+		forRole(t, protocol.Role_COMMUNICATION_SERVER)
+	})
+
+	t.Run("communication server hub role", func(t *testing.T) {
+		forRole(t, protocol.Role_COMMUNICATION_SERVER_HUB)
+	})
 }
 
 func TestConnectClient(t *testing.T) {
@@ -255,7 +265,7 @@ func TestConnectClient(t *testing.T) {
 	p := <-state.registerClient
 	p.close()
 
-	require.Equal(t, p.isServer, false)
+	require.Equal(t, p.role, protocol.Role_CLIENT)
 	conn.AssertExpectations(t)
 }
 
@@ -265,11 +275,11 @@ func TestRegisterCommServer(t *testing.T) {
 
 	conn := &MockWebsocket{}
 	conn.On("Close").Return(nil).Once()
-	s := makeCommServer(state, conn)
+	s := makePeer(state, conn, protocol.Role_COMMUNICATION_SERVER)
 
 	conn2 := &MockWebsocket{}
 	conn2.On("Close").Return(nil).Once()
-	s2 := makeCommServer(state, conn2)
+	s2 := makePeer(state, conn2, protocol.Role_COMMUNICATION_SERVER)
 
 	state.registerCommServer <- s
 	state.registerCommServer <- s2
@@ -302,11 +312,11 @@ func TestRegisterClient(t *testing.T) {
 
 	conn := &MockWebsocket{}
 	conn.On("Close").Return(nil).Once()
-	c := makeClient(state, conn)
+	c := makePeer(state, conn, protocol.Role_CLIENT)
 
 	conn2 := &MockWebsocket{}
 	conn2.On("Close").Return(nil).Once()
-	c2 := makeClient(state, conn2)
+	c2 := makePeer(state, conn2, protocol.Role_CLIENT)
 
 	state.registerClient <- c
 	state.registerClient <- c2
@@ -342,13 +352,13 @@ func TestUnregister(t *testing.T) {
 	defer closeState(state)
 
 	conn := &MockWebsocket{}
-	s := makeCommServer(state, conn)
+	s := makePeer(state, conn, protocol.Role_COMMUNICATION_SERVER)
 	s.Alias = 1
 	state.Peers[s.Alias] = s
 	selector.ServerAliases[s.Alias] = true
 
 	conn2 := &MockWebsocket{}
-	s2 := makeCommServer(state, conn2)
+	s2 := makePeer(state, conn2, protocol.Role_COMMUNICATION_SERVER)
 	s2.Alias = 2
 	state.Peers[s2.Alias] = s2
 	selector.ServerAliases[s2.Alias] = true
@@ -371,11 +381,11 @@ func TestSignaling(t *testing.T) {
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(state, conn)
+		p := makePeer(state, conn, protocol.Role_CLIENT)
 		p.Alias = 1
 
 		conn2 := &MockWebsocket{}
-		p2 := makeClient(state, conn2)
+		p2 := makePeer(state, conn2, protocol.Role_CLIENT)
 		p2.Alias = 2
 
 		state.Peers[p.Alias] = p
@@ -409,7 +419,7 @@ func TestSignaling(t *testing.T) {
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(state, conn)
+		p := makePeer(state, conn, protocol.Role_CLIENT)
 		p.Alias = 1
 
 		state.Peers[p.Alias] = p
@@ -432,12 +442,12 @@ func TestSignaling(t *testing.T) {
 		defer closeState(state)
 
 		conn := &MockWebsocket{}
-		p := makeClient(state, conn)
+		p := makePeer(state, conn, protocol.Role_CLIENT)
 		p.Alias = 1
 
 		conn2 := &MockWebsocket{}
 		conn2.On("Close").Return(nil).Once()
-		p2 := makeClient(state, conn2)
+		p2 := makePeer(state, conn2, protocol.Role_CLIENT)
 		p2.Alias = 2
 		p2.close()
 

@@ -323,15 +323,15 @@ func (p *peer) readTopicMessage(reliable bool, rawMsg []byte) {
 	} else {
 		topicFWMessage.FromAlias = p.alias
 		message.FromAlias = p.alias
-
-		rawMsgToServer, err := marshaller.Marshal(&message)
-		if err != nil {
-			p.log.Error().Err(err).Msg("encode topic message failure")
-			return
-		}
-		msg.rawMsgToServer = rawMsgToServer
 	}
 
+	rawMsgToServer, err := marshaller.Marshal(&message)
+	if err != nil {
+		p.log.Error().Err(err).Msg("encode topic message failure")
+		return
+	}
+
+	msg.rawMsgToServer = rawMsgToServer
 	rawMsgToClient, err := marshaller.Marshal(&topicFWMessage)
 	if err != nil {
 		p.log.Error().Err(err).Msg("encode topicfwmessage failure")

@@ -387,6 +387,7 @@ export enum Role {
   UNKNOWN_ROLE = 0,
   CLIENT = 1,
   COMMUNICATION_SERVER = 2,
+  COMMUNICATION_SERVER_HUB = 3,
 }
 
 export enum Format {
