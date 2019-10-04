@@ -302,6 +302,10 @@ func Start(config *Config) *Client {
 
 	client.log.Info().Msgf("my alias is %d", pData.Alias)
 
+	if len(pData.AvailableServers) == 0 {
+		client.log.Fatal().Msg("no available servers")
+	}
+
 	if err := client.Connect(pData.Alias, pData.AvailableServers[0]); err != nil {
 		client.log.Fatal().Err(err)
 	}
