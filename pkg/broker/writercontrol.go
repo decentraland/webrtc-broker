@@ -1,9 +1,12 @@
-package commserver
+package broker
 
 import (
 	"sync"
 	"sync/atomic"
 )
+
+// WriterControllerFactory ...
+type WriterControllerFactory = func(uint64, PeerWriter) WriterController
 
 // UnboundedWriterController simply discard any packages when the BufferedAmount > maxBufferSize
 type UnboundedWriterController struct {
@@ -77,6 +80,7 @@ func NewBufferedWriterController(
 func (c *BufferedWriterController) OnBufferedAmountLow() {
 	c.mux.Lock()
 	defer c.mux.Unlock()
+
 	for {
 		if len(c.queue) == 0 {
 			return
@@ -87,6 +91,7 @@ func (c *BufferedWriterController) OnBufferedAmountLow() {
 			if err := c.writer.Write(msg); err != nil {
 				return
 			}
+
 			c.queue = c.queue[1:]
 		} else {
 			break
@@ -140,6 +145,7 @@ func (c *FixedQueueWriterController) OnBufferedAmountLow() {
 		c.mux.Lock()
 
 		exit := true
+
 		if c.size > 0 {
 			msg := c.queue[c.tail]
 
@@ -147,9 +153,11 @@ func (c *FixedQueueWriterController) OnBufferedAmountLow() {
 				exit = false
 
 				c.tail++
+
 				if c.tail == len(c.queue) {
 					c.tail = 0
 				}
+
 				c.size--
 
 				if err := c.writer.Write(msg); err != nil {

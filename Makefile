@@ -4,7 +4,7 @@ DEBUG_FLAGS = -gcflags="all=-N -l"
 build:
 	go build -o build/simulation ./cmd/simulation
 	go build -o build/coordinator ./cmd/coordinator
-	go build -o build/server ./cmd/server
+	go build -o build/broker ./cmd/broker
 
 buildtest:
 	go build -o build/densetest ./cmd/perftest/densetest
@@ -13,7 +13,7 @@ buildall: build buildtest
 
 escape:
 	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/coordinator 2> build/escape.out
-	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/commserver  2>> build/escape.out
+	go build -gcflags -m github.com/decentraland/webrtc-broker/pkg/server 2>> build/escape.out
 	cat build/escape.out | grep -v inlining | grep -v "does not escape" | grep -v "can inline"
 
 compile-protocol:
@@ -21,14 +21,15 @@ compile-protocol:
 
 test: build
 	go test -count=1 -race $(TEST_FLAGS) \
-github.com/decentraland/webrtc-broker/pkg/commserver \
+github.com/decentraland/webrtc-broker/pkg/server \
+github.com/decentraland/webrtc-broker/pkg/broker \
 github.com/decentraland/webrtc-broker/pkg/coordinator
 
 integration:
 	go test -v -race -count=1 $(TEST_FLAGS) -tags=integration github.com/decentraland/webrtc-broker/pkg/simulation
 
 bench: build
-	go test -bench=. -run="NOTHING" github.com/decentraland/webrtc-broker/pkg/commserver
+	go test -bench=. -run="NOTHING" github.com/decentraland/webrtc-broker/pkg/server
 
 cover: TEST_FLAGS=-coverprofile=coverage.out
 cover: test

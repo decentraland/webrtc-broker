@@ -1,4 +1,4 @@
-package commserver
+package server
 
 import (
 	"crypto/ecdsa"
@@ -39,10 +39,6 @@ type ICECandidate = pion.ICECandidate
 // IWebRtc is this module interface
 type IWebRtc interface {
 	newConnection(peerAlias uint64) (*PeerConnection, error)
-	createReliableDataChannel(conn *PeerConnection) (*DataChannel, error)
-	createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error)
-	registerOpenHandler(*DataChannel, func())
-	detach(*DataChannel) (ReadWriteCloser, error)
 	createOffer(conn *PeerConnection) (pion.SessionDescription, error)
 	onAnswer(conn *PeerConnection, answer pion.SessionDescription) error
 	onOffer(conn *PeerConnection, offer pion.SessionDescription) (pion.SessionDescription, error)
@@ -67,6 +63,7 @@ func (w *webRTC) getCertificates() ([]pion.Certificate, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		w.certificate, err = pion.GenerateCertificate(sk)
 		if err != nil {
 			return nil, err
@@ -117,29 +114,6 @@ func (w *webRTC) isNew(conn *PeerConnection) bool {
 
 func (w *webRTC) close(conn io.Closer) error {
 	return conn.Close()
-}
-
-func (w *webRTC) createReliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
-	return conn.CreateDataChannel("reliable", nil)
-}
-
-func (w *webRTC) createUnreliableDataChannel(conn *PeerConnection) (*DataChannel, error) {
-	var maxRetransmits uint16
-	var ordered = false
-	options := &pion.DataChannelInit{
-		MaxRetransmits: &maxRetransmits,
-		Ordered:        &ordered,
-	}
-
-	return conn.CreateDataChannel("unreliable", options)
-}
-
-func (w *webRTC) registerOpenHandler(dc *DataChannel, handler func()) {
-	dc.OnOpen(handler)
-}
-
-func (w *webRTC) detach(dc *DataChannel) (ReadWriteCloser, error) {
-	return dc.Detach()
 }
 
 func (w *webRTC) createOffer(conn *PeerConnection) (pion.SessionDescription, error) {

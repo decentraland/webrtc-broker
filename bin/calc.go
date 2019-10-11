@@ -80,6 +80,7 @@ func upperBound(desc description) result {
 	// one ACK generated for all DATA chunks received during the time.
 	r.bytesSentPerSecond += uint64(5 * (sctpHeaderSize + 8 + r.packagesReceivedPerSecond*4))
 	r.bytesReceivedPerSecond += uint64(5 * (sctpHeaderSize + 8 + r.packagesSentPerSecond*4))
+
 	return r
 }
 
@@ -88,6 +89,7 @@ func scale(b uint64) (uint64, float64, float64, float64) {
 	kbps := float64(bps) / 1024.0
 	mbps := kbps / 1024.0
 	gbps := mbps / 1024.0
+
 	return bps, kbps, mbps, gbps
 }
 

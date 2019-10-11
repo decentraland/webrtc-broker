@@ -62,6 +62,7 @@ func (ws *websocket) WriteMessage(data []byte) error {
 	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		return err
 	}
+
 	return ws.conn.WriteMessage(_websocket.BinaryMessage, data)
 }
 
@@ -69,6 +70,7 @@ func (ws *websocket) WritePingMessage() error {
 	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		return err
 	}
+
 	return ws.conn.WriteMessage(_websocket.PingMessage, []byte{})
 }
 
@@ -76,6 +78,7 @@ func (ws *websocket) WriteCloseMessage() error {
 	if err := ws.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		return err
 	}
+
 	return ws.conn.WriteMessage(_websocket.CloseMessage, []byte{})
 }
 

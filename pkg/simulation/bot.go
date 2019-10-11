@@ -90,6 +90,7 @@ func StartBot(opts BotOptions) {
 	}
 
 	client := Start(&config)
+
 	err := client.SendTopicSubscriptionMessage(opts.Subscription)
 	if err != nil {
 		log.Fatal().Err(err).Msg("sending topic subscription message")

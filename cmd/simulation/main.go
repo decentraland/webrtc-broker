@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
-	_ "net/http/pprof"
 	"time"
 
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
@@ -18,22 +16,12 @@ import (
 func main() {
 	addr := flag.String("coordinatorURL", "ws://localhost:9090", "Coordinator URL")
 	nBots := flag.Int("n", 1, "number of bots")
-	profilerPort := flag.Int("profilerPort", -1, "If not provided, profiler won't be enabled")
 	trackStats := flag.Bool("trackStats", false, "")
-
 	flag.Parse()
 
 	log.Println("running random simulation")
 
 	auth := authentication.NoopAuthenticator{}
-
-	if *profilerPort != -1 {
-		go func() {
-			addr := fmt.Sprintf("localhost:%d", *profilerPort)
-			log.Println("Starting profiler at", addr)
-			log.Println(http.ListenAndServe(addr, nil))
-		}()
-	}
 
 	for i := 0; i < *nBots; i++ {
 		go func() {

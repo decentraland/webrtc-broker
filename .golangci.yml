@@ -10,6 +10,7 @@ linters:
     - dupl
     - funlen
     - gocognit
+    - gocyclo
 
 issues:
   exclude-use-default: false

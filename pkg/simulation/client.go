@@ -89,6 +89,7 @@ func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error
 
 	i := 0
 	last := len(topics) - 1
+
 	for topic := range topics {
 		if _, err := buffer.WriteString(topic); err != nil {
 			return err
@@ -114,6 +115,7 @@ func (client *Client) SendTopicSubscriptionMessage(topics map[string]bool) error
 	}
 
 	client.SendReliable <- bytes
+
 	return nil
 }
 
@@ -131,10 +133,12 @@ func (client *Client) signalCandidate(candidate *pion.ICECandidate) {
 		Data:    serializedCandidate,
 		ToAlias: client.serverAlias,
 	}
+
 	bytes, err := proto.Marshal(&msg)
 	if err != nil {
 		client.log.Fatal().Err(err).Msg("cannot serialize ice candidate message")
 	}
+
 	client.coordinatorWriteQueue <- bytes
 }
 
@@ -147,6 +151,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	api := pion.NewAPI(pion.WithSettingEngine(s))
 
 	webRtcConfig := pion.Configuration{ICEServers: client.iceServers}
+
 	conn, err := api.NewPeerConnection(webRtcConfig)
 	if err != nil {
 		return err
@@ -157,10 +162,12 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	client.serverAlias = serverAlias
 
 	msg := &protocol.ConnectMessage{Type: protocol.MessageType_CONNECT, ToAlias: serverAlias}
+
 	bytes, err := proto.Marshal(msg)
 	if err != nil {
 		client.log.Fatal().Err(err).Msg("cannot marshall connect message")
 	}
+
 	client.coordinatorWriteQueue <- bytes
 
 	conn.OnICECandidate(func(candidate *pion.ICECandidate) {
@@ -332,6 +339,7 @@ func (client *Client) startCoordination() error {
 	}
 
 	client.coordinator = c
+
 	defer func() {
 		err := c.Close()
 		if err != nil {
@@ -353,6 +361,7 @@ func (client *Client) startCoordination() error {
 	}()
 
 	header := protocol.CoordinatorMessage{}
+
 	for {
 		_, bytes, err := c.ReadMessage()
 		if err != nil {
@@ -415,6 +424,7 @@ func (client *Client) startCoordination() error {
 				Data:    serializedAnswer,
 				ToAlias: webRtcMessage.FromAlias,
 			}
+
 			bytes, err := proto.Marshal(answerWebRtcMessage)
 			if err != nil {
 				client.log.Fatal().Err(err).Msg("encode webrtc answer message failed")
@@ -435,15 +445,19 @@ func (client *Client) startCoordination() error {
 			client.candidatesMux.Unlock()
 		case protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
+
 			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
 				client.log.Error().Err(err).Msg("error unmarshalling webrtc message")
 				return err
 			}
+
 			client.log.Debug().Msg("ice candidate received")
+
 			candidate := pion.ICECandidateInit{}
 			if err := json.Unmarshal(webRtcMessage.Data, &candidate); err != nil {
 				client.log.Fatal().Err(err).Msg("error unmarshalling candidate")
 			}
+
 			if err := client.conn.AddICECandidate(candidate); err != nil {
 				client.log.Fatal().Err(err).Msg("error adding remote ice candidate")
 			}

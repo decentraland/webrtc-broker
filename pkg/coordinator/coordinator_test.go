@@ -45,6 +45,7 @@ func TestUpgradeRequest(t *testing.T) {
 	testSuccessfulUpgrade := func(t *testing.T, req *http.Request, expectedRole protocol.Role) {
 		auth := &mockCoordinatorAuthenticator{}
 		auth.On("AuthenticateFromURL", expectedRole, mock.Anything).Return(true, nil).Once()
+
 		config := Config{
 			ServerSelector: makeDefaultServerSelector(),
 			Auth:           auth,
@@ -283,6 +284,7 @@ func TestRegisterCommServer(t *testing.T) {
 
 	state.registerCommServer <- s
 	state.registerCommServer <- s2
+
 	go Start(state)
 
 	welcomeMessage := &protocol.WelcomeMessage{}
@@ -320,6 +322,7 @@ func TestRegisterClient(t *testing.T) {
 
 	state.registerClient <- c
 	state.registerClient <- c2
+
 	go Start(state)
 
 	welcomeMessage := &protocol.WelcomeMessage{}
@@ -349,6 +352,7 @@ func TestUnregister(t *testing.T) {
 	config := Config{ServerSelector: selector}
 	state := MakeState(&config)
 	state.unregister = make(chan *Peer)
+
 	defer closeState(state)
 
 	conn := &MockWebsocket{}

@@ -173,6 +173,7 @@ func makePeer(state *State, conn ws.IWebsocket, role protocol.Role) *Peer {
 
 func (p *Peer) send(state *State, msg protocol.Message) error {
 	log := state.log
+
 	bytes, err := state.marshaller.Marshal(msg)
 	if err != nil {
 		log.Error().Err(err).Msg("encode message failure")
@@ -180,11 +181,13 @@ func (p *Peer) send(state *State, msg protocol.Message) error {
 	}
 
 	p.sendCh <- bytes
+
 	return nil
 }
 
 func (p *Peer) writePump(state *State) {
 	ticker := time.NewTicker(pingPeriod)
+
 	defer func() {
 		ticker.Stop()
 	}()
@@ -198,8 +201,10 @@ func (p *Peer) writePump(state *State) {
 				if err := p.conn.WriteCloseMessage(); err != nil {
 					log.Debug().Err(err).Msg("error writing close message")
 				}
+
 				return
 			}
+
 			if err := p.conn.WriteMessage(bytes); err != nil {
 				log.Error().Err(err).Msg("error writing message")
 				return
@@ -212,8 +217,10 @@ func (p *Peer) writePump(state *State) {
 					if err := p.conn.WriteCloseMessage(); err != nil {
 						log.Debug().Err(err).Msg("error writing close message")
 					}
+
 					return
 				}
+
 				if err := p.conn.WriteMessage(bytes); err != nil {
 					log.Error().Err(err).Msg("error writing message")
 					return
@@ -233,6 +240,7 @@ func (p *Peer) close() {
 		if err := p.conn.Close(); err != nil {
 			p.log.Debug().Err(err).Msg("error closing peer")
 		}
+
 		close(p.sendCh)
 		p.isClosed = true
 	}
@@ -243,13 +251,17 @@ func readPump(state *State, p *Peer) {
 		p.close()
 		state.unregister <- p
 	}()
+
 	log := state.log
 	marshaller := state.marshaller
+
 	p.conn.SetReadLimit(maxMessageSize)
+
 	if err := p.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log.Error().Err(err).Msg("error setting read deadline")
 		return
 	}
+
 	p.conn.SetPongHandler(func(s string) error {
 		err := p.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return err
@@ -267,6 +279,7 @@ func readPump(state *State, p *Peer) {
 			} else {
 				log.Error().Err(err).Msg("read error")
 			}
+
 			break
 		}
 
@@ -343,9 +356,12 @@ func closeState(state *State) {
 func ConnectCommServer(state *State, conn ws.IWebsocket, role protocol.Role) {
 	log := state.log
 	log.Info().Msg("socket connect (server)")
+
 	p := makePeer(state, conn, role)
 	state.registerCommServer <- p
+
 	go readPump(state, p)
+
 	go p.writePump(state)
 }
 
@@ -353,9 +369,12 @@ func ConnectCommServer(state *State, conn ws.IWebsocket, role protocol.Role) {
 func ConnectClient(state *State, conn ws.IWebsocket) {
 	log := state.log
 	log.Info().Msg("socket connect (client)")
+
 	p := makePeer(state, conn, protocol.Role_CLIENT)
 	state.registerClient <- p
+
 	go readPump(state, p)
+
 	go p.writePump(state)
 }
 
@@ -363,6 +382,7 @@ func ConnectClient(state *State, conn ws.IWebsocket) {
 func Start(state *State) {
 	log := state.log
 	ticker := time.NewTicker(state.reportPeriod)
+
 	defer ticker.Stop()
 
 	ignoreError := func(err error) {
@@ -375,6 +395,7 @@ func Start(state *State) {
 		select {
 		case s := <-state.registerCommServer:
 			ignoreError(registerCommServer(state, s))
+
 			n := len(state.registerCommServer)
 			for i := 0; i < n; i++ {
 				s = <-state.registerCommServer
@@ -382,6 +403,7 @@ func Start(state *State) {
 			}
 		case c := <-state.registerClient:
 			ignoreError(registerClient(state, c))
+
 			n := len(state.registerClient)
 			for i := 0; i < n; i++ {
 				c = <-state.registerClient
@@ -389,6 +411,7 @@ func Start(state *State) {
 			}
 		case c := <-state.unregister:
 			unregister(state, c)
+
 			n := len(state.unregister)
 			for i := 0; i < n; i++ {
 				c = <-state.unregister
@@ -396,6 +419,7 @@ func Start(state *State) {
 			}
 		case inMsg := <-state.signalingQueue:
 			signal(state, inMsg)
+
 			n := len(state.signalingQueue)
 			for i := 0; i < n; i++ {
 				inMsg = <-state.signalingQueue
@@ -497,6 +521,7 @@ func registerClient(state *State, p *Peer) error {
 		p.close()
 		return err
 	}
+
 	return nil
 }
 
@@ -527,10 +552,12 @@ func repackageWebRtcMessage(state *State, from *Peer, bytes []byte,
 	webRtcMessage *protocol.WebRtcMessage) ([]byte, error) {
 	log := state.log
 	marshaller := state.marshaller
+
 	if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {
 		log.Debug().Err(err).Msg("decode webrtc message failure")
 		return nil, err
 	}
+
 	webRtcMessage.FromAlias = from.Alias
 
 	bytes, err := marshaller.Marshal(webRtcMessage)

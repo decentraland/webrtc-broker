@@ -1,4 +1,4 @@
-package commserver
+package server
 
 import (
 	"errors"
@@ -8,6 +8,7 @@ import (
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/internal/ws"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
+	"github.com/golang/protobuf/proto"
 )
 
 const (
@@ -20,21 +21,15 @@ const (
 
 type coordinator struct {
 	log         logging.Logger
-	url         string
 	conn        ws.IWebsocket
 	send        chan []byte
 	exitOnClose bool
 	closed      bool
 }
 
-func (c *coordinator) Connect(state *State) error {
-	url, err := state.services.Auth.GenerateServerConnectURL(c.url, state.role)
-	if err != nil {
-		c.log.Error().Err(err).Msg("error generating communication server auth url")
-		return err
-	}
-
+func (c *coordinator) Connect(server *Server, url string) error {
 	retryPeriod := retryInitialPeriod
+
 	for retryIndex := 0; retryIndex < retryCount; retryIndex++ {
 		conn, err := ws.Dial(url)
 		if err == nil {
@@ -42,7 +37,8 @@ func (c *coordinator) Connect(state *State) error {
 			return nil
 		}
 
-		c.log.Error().Str("url", c.url).Err(err).Msg("cannot connect to coordinator node")
+		c.log.Error().Str("url", url).Err(err).Msg("cannot connect to coordinator node")
+
 		if (retryIndex + 1) < retryCount {
 			c.log.Debug().
 				Str("retry", retryPeriod.String()).
@@ -56,50 +52,56 @@ func (c *coordinator) Connect(state *State) error {
 	return fmt.Errorf("cannot connect to coordinator after %d retries", retryCount)
 }
 
-func (c *coordinator) Send(state *State, msg protocol.Message) error {
+func (c *coordinator) Send(msg protocol.Message) error {
 	log := c.log
+
 	if c.closed {
 		return errors.New("coordinator connection is closed")
 	}
-	bytes, err := state.services.Marshaller.Marshal(msg)
+
+	bytes, err := proto.Marshal(msg)
 	if err != nil {
 		log.Error().Err(err).Msg("encode message failure")
 		return err
 	}
 
 	c.send <- bytes
+
 	return nil
 }
 
-func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.WelcomeMessage) {
+func (c *coordinator) readPump(server *Server, welcomeChannel chan *protocol.WelcomeMessage) {
 	defer func() {
 		c.Close()
 	}()
 
 	log := c.log
-	marshaller := state.services.Marshaller
 	c.conn.SetReadLimit(maxCoordinatorMessageSize)
+
 	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log.Error().Err(err).Msg("Cannot set read deadline")
 		return
 	}
+
 	c.conn.SetPongHandler(func(s string) error {
 		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	header := &protocol.CoordinatorMessage{}
+
 	for {
 		bytes, err := c.conn.ReadMessage()
 		if err != nil {
 			if ws.IsUnexpectedCloseError(err) {
 				log.Error().Err(err).Msg("unexcepted close error")
 			} else {
-				log.Error().Err(err).Msg("read error")
+				log.Error().Err(err).Msg("read error in coordinator ws")
 			}
+
 			break
 		}
 
-		if err := marshaller.Unmarshal(bytes, header); err != nil {
+		if err := proto.Unmarshal(bytes, header); err != nil {
 			log.Debug().Err(err).Msg("decode header failure")
 			continue
 		}
@@ -109,7 +111,7 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 		switch msgType {
 		case protocol.MessageType_WELCOME:
 			welcomeMessage := &protocol.WelcomeMessage{}
-			if err := marshaller.Unmarshal(bytes, welcomeMessage); err != nil {
+			if err := proto.Unmarshal(bytes, welcomeMessage); err != nil {
 				log.Error().Err(err).Msg("decode welcome message failure")
 				return
 			}
@@ -118,28 +120,30 @@ func (c *coordinator) readPump(state *State, welcomeChannel chan *protocol.Welco
 			welcomeChannel <- welcomeMessage
 		case protocol.MessageType_WEBRTC_OFFER, protocol.MessageType_WEBRTC_ANSWER, protocol.MessageType_WEBRTC_ICE_CANDIDATE:
 			webRtcMessage := &protocol.WebRtcMessage{}
-			if err := marshaller.Unmarshal(bytes, webRtcMessage); err != nil {
+			if err := proto.Unmarshal(bytes, webRtcMessage); err != nil {
 				log.Debug().Err(err).Msg("decode webrtc message failure")
 				continue
 			}
-			state.webRtcControlCh <- webRtcMessage
+			server.webRtcControlCh <- webRtcMessage
 		case protocol.MessageType_CONNECT:
 			connectMessage := &protocol.ConnectMessage{}
-			if err := marshaller.Unmarshal(bytes, connectMessage); err != nil {
+			if err := proto.Unmarshal(bytes, connectMessage); err != nil {
 				log.Debug().Err(err).Msg("decode connect message failure")
 				continue
 			}
+
 			log.Debug().Uint64("to", connectMessage.FromAlias).Msg("Connect message received")
-			state.connectCh <- connectMessage.FromAlias
+			server.connectCh <- connectMessage.FromAlias
 		default:
 			log.Debug().Str("type", msgType.String()).Msg("unhandled message from coordinator")
 		}
 	}
 }
 
-func (c *coordinator) writePump(_ *State) {
+func (c *coordinator) writePump() {
 	log := c.log
 	ticker := time.NewTicker(pingPeriod)
+
 	defer func() {
 		ticker.Stop()
 		if err := c.conn.Close(); err != nil {
@@ -154,7 +158,9 @@ func (c *coordinator) writePump(_ *State) {
 				if err := c.conn.WriteCloseMessage(); err != nil {
 					log.Debug().Err(err).Msg("error sending write close message")
 				}
+
 				log.Info().Msg("channel closed")
+
 				return
 			}
 
@@ -184,12 +190,14 @@ func (c *coordinator) Close() {
 	if c.closed {
 		return
 	}
+
 	c.closed = true
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
 			c.log.Debug().Err(err).Msg("error closing coordinator")
 		}
 	}
+
 	close(c.send)
 
 	if c.exitOnClose {

@@ -1,4 +1,4 @@
-package commserver
+package broker
 
 import (
 	"testing"

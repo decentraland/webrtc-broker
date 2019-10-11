@@ -15,12 +15,15 @@ func newLogger(name string) zerolog.Logger {
 
 func main() {
 	var coordinatorURL string
+
 	var nBots int
+
 	var spawnObserver bool
 
 	flag.StringVar(&coordinatorURL, "coordinatorURL", "ws://localhost:9090", "")
 	flag.IntVar(&nBots, "n", 50, "")
 	flag.BoolVar(&spawnObserver, "observer", false, "")
+	flag.Parse()
 
 	fmt.Println("starting test: ", coordinatorURL)
 
@@ -38,6 +41,7 @@ func main() {
 
 	if spawnObserver {
 		log := newLogger("observer")
+
 		simulation.StartBot(simulation.BotOptions{
 			CoordinatorURL: coordinatorURL,
 			Topic:          "testtopic",

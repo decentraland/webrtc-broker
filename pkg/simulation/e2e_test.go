@@ -12,7 +12,7 @@ import (
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 
-	"github.com/decentraland/webrtc-broker/pkg/commserver"
+	"github.com/decentraland/webrtc-broker/pkg/broker"
 	"github.com/decentraland/webrtc-broker/pkg/coordinator"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 	"github.com/golang/protobuf/proto"
@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	sleepPeriod     = 5 * time.Second
-	longSleepPeriod = 15 * time.Second
+	sleepPeriod     = 9 * time.Second
+	longSleepPeriod = sleepPeriod * 2
 )
 
 var testLogLevel = zerolog.InfoLevel
@@ -30,8 +30,8 @@ var clientLogLevel = zerolog.WarnLevel
 var serverLogLevel = zerolog.WarnLevel
 var coordinatorLogLevel = zerolog.WarnLevel
 
-type PeerWriter = commserver.PeerWriter
-type WriterController = commserver.WriterController
+type PeerWriter = broker.PeerWriter
+type WriterController = broker.WriterController
 
 func printTitle(log zerolog.Logger, title string) {
 	log.Info().Msgf("=== %s ===", title)
@@ -80,63 +80,26 @@ func startCoordinatorWithConfig(t *testing.T, addr string, config *coordinator.C
 	return state, s, fmt.Sprintf("ws://%s", addr)
 }
 
-type commServerSnapshot struct {
-	Alias uint64
-	Peers map[uint64]commserver.PeerStats
+func startBroker(t *testing.T, coordinatorURL string, role protocol.Role) *broker.Broker {
+	config := &broker.Config{CoordinatorURL: coordinatorURL, Role: role}
+	return startBrokerWithConfig(t, config)
 }
 
-type testReporter struct {
-	RequestData chan bool
-	Data        chan commServerSnapshot
-}
-
-func (r *testReporter) Report(stats commserver.Stats) {
-	select {
-	case <-r.RequestData:
-		peers := make(map[uint64]commserver.PeerStats, len(stats.Peers))
-		for _, p := range stats.Peers {
-			peers[p.Alias] = p
-		}
-
-		snapshot := commServerSnapshot{
-			Alias: stats.Alias,
-			Peers: peers,
-		}
-		r.Data <- snapshot
-	default:
-	}
-}
-
-func (r *testReporter) GetStateSnapshot() commServerSnapshot {
-	r.RequestData <- true
-	return <-r.Data
-}
-
-func startCommServer(t *testing.T, coordinatorURL string, role protocol.Role) (*commserver.State, *testReporter) {
-	config := &commserver.Config{CoordinatorURL: coordinatorURL, Role: role}
-	return startCommServerWithConfig(t, config)
-}
-
-func startCommServerWithConfig(t *testing.T, config *commserver.Config) (*commserver.State, *testReporter) {
-	reporter := &testReporter{
-		RequestData: make(chan bool),
-		Data:        make(chan commServerSnapshot),
-	}
-
+func startBrokerWithConfig(t *testing.T, config *broker.Config) *broker.Broker {
 	config.Auth = &authentication.NoopAuthenticator{}
 	log := logging.New().Level(serverLogLevel)
 	config.Log = &log
-	config.ReportPeriod = 1 * time.Second
-	config.Reporter = func(stats commserver.Stats) { reporter.Report(stats) }
 
-	ws, err := commserver.MakeState(config)
+	b, err := broker.NewBroker(config)
 	require.NoError(t, err)
 	t.Log("Starting communication server node")
 
-	require.NoError(t, commserver.ConnectCoordinator(ws))
-	go commserver.ProcessMessagesQueue(ws)
-	go commserver.Process(ws)
-	return ws, reporter
+	require.NoError(t, b.Connect())
+
+	go b.ProcessSubscriptionChannel()
+	go b.ProcessMessagesChannel()
+	go b.ProcessControlMessages()
+	return b
 }
 
 func start(t *testing.T, client *Client) peerData {
@@ -179,8 +142,8 @@ func TestSingleServerTopology(t *testing.T) {
 	log := logging.New().Level(testLogLevel)
 
 	printTitle(log, "Starting comm servers")
-	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
-	defer commserver.Shutdown(server1State)
+	broker1 := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer broker1.Shutdown()
 
 	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
 	c2, c2ReceivedReliable, c2ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
@@ -198,17 +161,16 @@ func TestSingleServerTopology(t *testing.T) {
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
 
-	server1Snapshot := server1Reporter.GetStateSnapshot()
-	require.NotEmpty(t, server1Snapshot.Alias)
+	broker1Stats := broker1.GetBrokerStats()
+	require.NotEmpty(t, broker1.Alias)
 	require.NotEmpty(t, c1Data.Alias)
 	require.NotEmpty(t, c2Data.Alias)
-	require.Equal(t, 2, len(server1Snapshot.Peers))
 
-	log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
+	log.Info().Msgf("broker1 alias is %d", broker1Stats.Alias)
 
-	printTitle(log, "Connections")
-	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
-	require.Contains(t, server1Snapshot.Peers, c2Data.Alias)
+	require.Contains(t, broker1Stats.Peers, c1Data.Alias)
+	require.Contains(t, broker1Stats.Peers, c2Data.Alias)
+	require.Equal(t, 2, len(broker1Stats.Peers))
 
 	printTitle(log, "Authorizing clients")
 	authMessage := protocol.AuthMessage{
@@ -223,7 +185,7 @@ func TestSingleServerTopology(t *testing.T) {
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
-	server1Snapshot = server1Reporter.GetStateSnapshot()
+	broker1Stats = broker1.GetBrokerStats()
 
 	printTitle(log, "Both clients are subscribing to 'test' topic")
 	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
@@ -298,7 +260,7 @@ func TestSingleServerTopology(t *testing.T) {
 	c2.StopUnreliableQueue <- true
 	go c2.conn.Close()
 	c2.conn = nil
-	c2.Connect(c2Data.Alias, server1Snapshot.Alias)
+	c2.Connect(c2Data.Alias, broker1Stats.Alias)
 	c2.authMessage <- authBytes
 	time.Sleep(longSleepPeriod)
 
@@ -336,11 +298,11 @@ func TestMeshTopology(t *testing.T) {
 	log := logging.New().Level(testLogLevel)
 
 	printTitle(log, "Starting comm servers")
-	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
-	defer commserver.Shutdown(server1State)
+	broker1 := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer broker1.Shutdown()
 
-	server2State, server2Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
-	defer commserver.Shutdown(server2State)
+	broker2 := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer broker2.Shutdown()
 
 	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
 	c2, c2ReceivedReliable, c2ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
@@ -358,22 +320,21 @@ func TestMeshTopology(t *testing.T) {
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
 
-	server1Snapshot := server1Reporter.GetStateSnapshot()
-	server2Snapshot := server2Reporter.GetStateSnapshot()
-	require.NotEmpty(t, server1Snapshot.Alias)
-	require.NotEmpty(t, server2Snapshot.Alias)
+	broker1Stats := broker1.GetBrokerStats()
+	broker2Stats := broker2.GetBrokerStats()
+	require.NotEmpty(t, broker1Stats.Alias)
+	require.NotEmpty(t, broker2Stats.Alias)
 	require.NotEmpty(t, c1Data.Alias)
 	require.NotEmpty(t, c2Data.Alias)
-	require.Equal(t, 4, len(server1Snapshot.Peers)+len(server2Snapshot.Peers))
 
-	log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
-	log.Info().Msgf("commserver2 alias is %d", server2Snapshot.Alias)
+	log.Info().Msgf("broker1 alias is %d", broker1Stats.Alias)
+	log.Info().Msgf("broker2 alias is %d", broker2Stats.Alias)
 
-	printTitle(log, "Connections")
-	require.Contains(t, server1Snapshot.Peers, server2Snapshot.Alias)
-	require.Contains(t, server2Snapshot.Peers, server1Snapshot.Alias)
-	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
-	require.Contains(t, server2Snapshot.Peers, c2Data.Alias)
+	require.Contains(t, broker1Stats.Peers, broker2Stats.Alias)
+	require.Contains(t, broker2Stats.Peers, broker1Stats.Alias)
+	require.Contains(t, broker1Stats.Peers, c1Data.Alias)
+	require.Contains(t, broker2Stats.Peers, c2Data.Alias)
+	require.Equal(t, 4, len(broker1Stats.Peers)+len(broker2Stats.Peers))
 
 	printTitle(log, "Authorizing clients")
 	authMessage := protocol.AuthMessage{
@@ -388,8 +349,8 @@ func TestMeshTopology(t *testing.T) {
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
-	server1Snapshot = server1Reporter.GetStateSnapshot()
-	server2Snapshot = server2Reporter.GetStateSnapshot()
+	broker1Stats = broker1.GetBrokerStats()
+	broker2Stats = broker2.GetBrokerStats()
 
 	printTitle(log, "Both clients are subscribing to 'test' topic")
 	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
@@ -464,7 +425,7 @@ func TestMeshTopology(t *testing.T) {
 	c2.StopUnreliableQueue <- true
 	go c2.conn.Close()
 	c2.conn = nil
-	c2.Connect(c2Data.Alias, server1Snapshot.Alias)
+	c2.Connect(c2Data.Alias, broker1Stats.Alias)
 	c2.authMessage <- authBytes
 	time.Sleep(longSleepPeriod)
 
@@ -551,14 +512,14 @@ func TestStarTopology(t *testing.T) {
 	log := logging.New().Level(testLogLevel)
 
 	printTitle(log, "Starting comm servers")
-	hubServerState, hubServerReporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER_HUB)
-	defer commserver.Shutdown(hubServerState)
+	hub := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER_HUB)
+	defer hub.Shutdown()
 
-	server1State, server1Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
-	defer commserver.Shutdown(server1State)
+	broker1 := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer broker1.Shutdown()
 
-	server2State, server2Reporter := startCommServer(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
-	defer commserver.Shutdown(server2State)
+	broker2 := startBroker(t, coordinatorURL, protocol.Role_COMMUNICATION_SERVER)
+	defer broker2.Shutdown()
 
 	c1, c1ReceivedReliable, c1ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
 	c2, c2ReceivedReliable, c2ReceivedUnreliable := makeReadableClient(t, coordinatorURL)
@@ -576,24 +537,23 @@ func TestStarTopology(t *testing.T) {
 	// NOTE: wait until connections are ready
 	time.Sleep(sleepPeriod)
 
-	hubServerSnapshot := hubServerReporter.GetStateSnapshot()
-	server1Snapshot := server1Reporter.GetStateSnapshot()
-	server2Snapshot := server2Reporter.GetStateSnapshot()
-	require.NotEmpty(t, server1Snapshot.Alias)
-	require.NotEmpty(t, server2Snapshot.Alias)
+	hubStats := hub.GetBrokerStats()
+	broker1Stats := broker1.GetBrokerStats()
+	broker2Stats := broker2.GetBrokerStats()
+	require.NotEmpty(t, broker1Stats.Alias)
+	require.NotEmpty(t, broker2Stats.Alias)
 	require.NotEmpty(t, c1Data.Alias)
 	require.NotEmpty(t, c2Data.Alias)
-	require.Equal(t, 4, len(server1Snapshot.Peers)+len(server2Snapshot.Peers))
 
-	log.Info().Msgf("commserver hub alias is %d", hubServerSnapshot.Alias)
-	log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
-	log.Info().Msgf("commserver2 alias is %d", server2Snapshot.Alias)
+	log.Info().Msgf("hub alias is %d", hubStats.Alias)
+	log.Info().Msgf("broker1 alias is %d", broker1Stats.Alias)
+	log.Info().Msgf("broker2 alias is %d", broker2Stats.Alias)
 
-	printTitle(log, "Connections")
-	require.Contains(t, server1Snapshot.Peers, hubServerSnapshot.Alias)
-	require.Contains(t, server2Snapshot.Peers, hubServerSnapshot.Alias)
-	require.Contains(t, server1Snapshot.Peers, c1Data.Alias)
-	require.Contains(t, server2Snapshot.Peers, c2Data.Alias)
+	require.Contains(t, broker1Stats.Peers, hubStats.Alias)
+	require.Contains(t, broker2Stats.Peers, hubStats.Alias)
+	require.Contains(t, broker1Stats.Peers, c1Data.Alias)
+	require.Contains(t, broker2Stats.Peers, c2Data.Alias)
+	require.Equal(t, 4, len(broker1Stats.Peers)+len(broker2Stats.Peers))
 
 	printTitle(log, "Authorizing clients")
 	authMessage := protocol.AuthMessage{
@@ -608,8 +568,6 @@ func TestStarTopology(t *testing.T) {
 
 	// NOTE: wait until connections are authenticated
 	time.Sleep(longSleepPeriod)
-	// server1Snapshot = server1Reporter.GetStateSnapshot()
-	// server2Snapshot = server2Reporter.GetStateSnapshot()
 
 	printTitle(log, "Both clients are subscribing to 'test' topic")
 	require.NoError(t, c1.SendTopicSubscriptionMessage(map[string]bool{"test": true}))
@@ -681,26 +639,22 @@ func TestStarTopology(t *testing.T) {
 
 type session struct {
 	coordinator *http.Server
-
-	commServerState    *commserver.State
-	commServerReporter *testReporter
+	broker      *broker.Broker
 
 	c1, c2           *Client
 	c1Alias, c2Alias uint64
 }
 
 func TestControlFlow(t *testing.T) {
-	prepare := func(t *testing.T, log logging.Logger, commConfig *commserver.Config) session {
+	prepare := func(t *testing.T, log logging.Logger, brokerConfig *broker.Config) session {
 		var s session
 		_, server, coordinatorURL := startCoordinator(t, "localhost:9999")
 		s.coordinator = server
 
 		printTitle(log, "Starting comm server")
-		commConfig.CoordinatorURL = coordinatorURL
-		commConfig.Role = protocol.Role_COMMUNICATION_SERVER
-		commserverState, commReporter := startCommServerWithConfig(t, commConfig)
-		s.commServerState = commserverState
-		s.commServerReporter = commReporter
+		brokerConfig.CoordinatorURL = coordinatorURL
+		brokerConfig.Role = protocol.Role_COMMUNICATION_SERVER
+		s.broker = startBrokerWithConfig(t, brokerConfig)
 
 		auth := &authentication.NoopAuthenticator{}
 
@@ -729,18 +683,19 @@ func TestControlFlow(t *testing.T) {
 		// NOTE: wait until connections are ready
 		time.Sleep(sleepPeriod)
 
-		server1Snapshot := commReporter.GetStateSnapshot()
-		require.NotEmpty(t, server1Snapshot.Alias)
+		brokerStats := s.broker.GetBrokerStats()
+		require.NotEmpty(t, brokerStats.Alias)
 		require.NotEmpty(t, c1Data.Alias)
 		require.NotEmpty(t, c2Data.Alias)
-		require.Equal(t, 2, len(server1Snapshot.Peers))
 
 		printTitle(log, "Aliases")
-		log.Info().Msgf("commserver1 alias is %d", server1Snapshot.Alias)
+		log.Info().Msgf("broker alias is %d", brokerStats.Alias)
 		log.Info().Msgf("client1 alias is %d", c1Data.Alias)
 		log.Info().Msgf("client2 alias is %d", c2Data.Alias)
 		s.c1Alias = c1Data.Alias
 		s.c2Alias = c2Data.Alias
+
+		require.Equal(t, 2, len(brokerStats.Peers))
 
 		printTitle(log, "Authorizing clients")
 		authMessage := protocol.AuthMessage{
@@ -769,10 +724,10 @@ func TestControlFlow(t *testing.T) {
 	t.Run("fixed queue controller", func(t *testing.T) {
 		log := logging.New().Level(testLogLevel)
 
-		var c2UnreliableWriter *commserver.FixedQueueWriterController
-		s := prepare(t, log, &commserver.Config{
+		var c2UnreliableWriter *broker.FixedQueueWriterController
+		s := prepare(t, log, &broker.Config{
 			UnreliableWriterControllerFactory: func(alias uint64, writer PeerWriter) WriterController {
-				w := commserver.NewFixedQueueWriterController(writer, 100, 200)
+				w := broker.NewFixedQueueWriterController(writer, 100, 200)
 				if alias == 3 {
 					c2UnreliableWriter = w
 				}
@@ -780,7 +735,7 @@ func TestControlFlow(t *testing.T) {
 			},
 		})
 		defer s.coordinator.Close()
-		defer commserver.Shutdown(s.commServerState)
+		defer s.broker.Shutdown()
 
 		msg := protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
@@ -798,11 +753,11 @@ func TestControlFlow(t *testing.T) {
 		}(messageCount)
 
 		for {
-			client2Stats := s.commServerReporter.GetStateSnapshot().Peers[s.c2Alias]
+			client2Stats := s.broker.GetBrokerStats().Peers[s.c2Alias]
 			unreliableBufferedAmount := client2Stats.UnreliableBufferedAmount
 			unreliableMessagesSent := client2Stats.UnreliableMessagesSent
 			discardedCount := c2UnreliableWriter.GetDiscardedCount()
-			log.Info().
+			log.Debug().
 				Uint64("unreliable buffered amount", unreliableBufferedAmount).
 				Uint32("unreliable messages sent", unreliableMessagesSent).
 				Uint32("unreliable messages discarded", discardedCount).
@@ -822,10 +777,10 @@ func TestControlFlow(t *testing.T) {
 	t.Run("discard writer controller", func(t *testing.T) {
 		log := logging.New().Level(testLogLevel)
 
-		var c2UnreliableWriter *commserver.DiscardWriterController
-		s := prepare(t, log, &commserver.Config{
+		var c2UnreliableWriter *broker.DiscardWriterController
+		s := prepare(t, log, &broker.Config{
 			UnreliableWriterControllerFactory: func(alias uint64, writer PeerWriter) WriterController {
-				w := commserver.NewDiscardWriterController(writer, 200)
+				w := broker.NewDiscardWriterController(writer, 200)
 				if alias == 3 {
 					c2UnreliableWriter = w
 				}
@@ -833,7 +788,7 @@ func TestControlFlow(t *testing.T) {
 			},
 		})
 		defer s.coordinator.Close()
-		defer commserver.Shutdown(s.commServerState)
+		defer s.broker.Shutdown()
 
 		msg := protocol.TopicMessage{
 			Type:  protocol.MessageType_TOPIC,
@@ -850,18 +805,19 @@ func TestControlFlow(t *testing.T) {
 			}
 		}(messageCount)
 
+		tolerance := 32
 		for {
-			client2Stats := s.commServerReporter.GetStateSnapshot().Peers[s.c2Alias]
+			client2Stats := s.broker.GetBrokerStats().Peers[s.c2Alias]
 			unreliableBufferedAmount := client2Stats.UnreliableBufferedAmount
 			unreliableMessagesSent := client2Stats.UnreliableMessagesSent
 			discardedCount := c2UnreliableWriter.GetDiscardedCount()
-			log.Info().
+			log.Debug().
 				Uint64("unreliable buffered amount", unreliableBufferedAmount).
 				Uint32("unreliable messages sent", unreliableMessagesSent).
 				Uint32("unreliable messages discarded", discardedCount).
 				Msg("buffered amount")
 
-			require.LessOrEqual(t, unreliableBufferedAmount, uint64(100))
+			require.LessOrEqual(t, unreliableBufferedAmount, uint64(100+tolerance))
 			if (unreliableMessagesSent + discardedCount) == messageCount {
 				break
 			}

@@ -45,6 +45,7 @@ func (a *NoopAuthenticator) GenerateServerAuthMessage() (*protocol.AuthMessage, 
 		Type: protocol.MessageType_AUTH,
 		Role: protocol.Role_COMMUNICATION_SERVER,
 	}
+
 	return m, nil
 }
 
@@ -54,6 +55,7 @@ func (a *NoopAuthenticator) GenerateClientAuthMessage() (*protocol.AuthMessage, 
 		Type: protocol.MessageType_AUTH,
 		Role: protocol.Role_CLIENT,
 	}
+
 	return m, nil
 }
 
