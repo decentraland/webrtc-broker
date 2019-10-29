@@ -461,6 +461,15 @@ func (client *Client) startCoordination() error {
 			if err := client.conn.AddICECandidate(candidate); err != nil {
 				client.log.Fatal().Err(err).Msg("error adding remote ice candidate")
 			}
+		case protocol.MessageType_CONNECTION_REFUSED:
+			connectionRefusedMessage := &protocol.ConnectionRefusedMessage{}
+			if err := proto.Unmarshal(bytes, connectionRefusedMessage); err != nil {
+				client.log.Error().Err(err).Msg("error unmarshalling connection refused message")
+				return err
+			}
+
+			client.log.Info().Str("reason", connectionRefusedMessage.Reason.String()).Msg("connectionRefused")
+			client.log.Fatal().Msg("connectionRefused")
 		}
 	}
 }

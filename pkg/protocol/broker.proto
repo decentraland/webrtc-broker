@@ -18,6 +18,9 @@ enum MessageType {
 
   TOPIC_IDENTITY = 11;
   TOPIC_IDENTITY_FW = 12;
+
+  CONNECTION_REFUSED = 13;
+  ERROR = 14;
 }
 
 enum Role {
@@ -56,6 +59,20 @@ message WebRtcMessage {
     uint64 from_alias = 2;
     uint64 to_alias = 3;
     bytes data = 4;
+}
+
+enum ConnectionRefusedReason {
+  UNKNOWN_REASON = 0;
+  SERVER_FULL = 1;
+  AUTH_FAILED = 2;
+}
+
+message ConnectionRefusedMessage {
+    MessageType type = 1;
+    uint64 from_alias = 2;
+    uint64 to_alias = 3;
+    ConnectionRefusedReason reason = 4;
+    bytes data = 5;
 }
 
 // NOTE: comm server messsages

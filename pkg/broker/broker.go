@@ -57,7 +57,6 @@ type Broker struct {
 // Config is the broker config
 type Config struct {
 	CoordinatorURL                              string
-	Role                                        protocol.Role
 	Log                                         *logging.Logger
 	ICEServers                                  []pion.ICEServer
 	Zipper                                      ZipCompression
@@ -66,6 +65,8 @@ type Config struct {
 	UnreliableWriterControllerFactory           WriterControllerFactory
 	ReliableChannelBufferedAmountLowThreshold   uint64
 	UnreliableChannelBufferedAmountLowThreshold uint64
+	Role                                        protocol.Role
+	MaxPeers                                    uint16
 }
 
 type peer struct {
@@ -633,6 +634,8 @@ func NewBroker(config *Config) (*Broker, error) {
 		ICEServers:             config.ICEServers,
 		OnNewPeerHdlr:          broker.onNewPeer,
 		OnPeerDisconnectedHdlr: broker.onPeerDisconnected,
+		ExitOnCoordinatorClose: true,
+		MaxPeers:               config.MaxPeers,
 	})
 	if err != nil {
 		return nil, err

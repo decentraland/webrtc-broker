@@ -3,6 +3,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -19,8 +20,10 @@ type Config struct {
 	EstablishSessionTimeout time.Duration
 	ICEServers              []ICEServer
 	ExitOnCoordinatorClose  bool
-	OnNewPeerHdlr           func(p *Peer) error
-	OnPeerDisconnectedHdlr  func(p *Peer)
+	MaxPeers                uint16
+
+	OnNewPeerHdlr          func(p *Peer) error
+	OnPeerDisconnectedHdlr func(p *Peer)
 }
 
 // Server ...
@@ -35,6 +38,7 @@ type Server struct {
 	webRtcControlCh         chan *protocol.WebRtcMessage
 	unregisterCh            chan *Peer
 	establishSessionTimeout time.Duration
+	maxPeers                uint16
 
 	onNewPeerHdlr          func(p *Peer) error
 	onPeerDisconnectedHdlr func(p *Peer)
@@ -110,6 +114,7 @@ func NewServer(config *Config) (*Server, error) {
 		webRtc:                  config.WebRtc,
 		onNewPeerHdlr:           config.OnNewPeerHdlr,
 		onPeerDisconnectedHdlr:  config.OnPeerDisconnectedHdlr,
+		maxPeers:                config.MaxPeers,
 	}
 
 	server.log = log
@@ -264,6 +269,28 @@ func (s *Server) sendICECandidate(alias uint64, candidate *ICECandidate) {
 }
 
 func (s *Server) initPeer(alias uint64) (*Peer, error) {
+	if s.maxPeers > 0 {
+		s.peersMux.Lock()
+		size := len(s.peers)
+		s.peersMux.Unlock()
+
+		if uint16(size+1) > s.maxPeers {
+			s.log.Info().Uint64("peer", alias).Msg("reject peer, the server is full")
+
+			refusedMessage := protocol.ConnectionRefusedMessage{
+				Type:    protocol.MessageType_CONNECTION_REFUSED,
+				ToAlias: alias,
+				Reason:  protocol.ConnectionRefusedReason_SERVER_FULL,
+			}
+
+			if err := s.coordinator.Send(&refusedMessage); err != nil {
+				s.log.Info().Uint64("peer", alias).Msg("cannot send refused connection message")
+			}
+
+			return nil, errors.New("server full")
+		}
+	}
+
 	establishSessionTimeout := s.establishSessionTimeout
 	s.log.Debug().Uint64("serverAlias", s.Alias).Uint64("peer", alias).Msg("init peer")
 

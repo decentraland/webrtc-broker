@@ -59,4 +59,9 @@ lintci:
 validateci:
 	circleci config validate
 
+installtools:
+	GO111MODULE=off go get -u -v github.com/davecheney/gcvis
+	GO111MODULE=off go get -u github.com/golangci/golangci-lint/cmd/golangci-lint
+	GO111MODULE=off go get -u golang.org/x/lint/golint
+
 .PHONY: build test integration cover

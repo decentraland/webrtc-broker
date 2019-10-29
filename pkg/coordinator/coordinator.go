@@ -270,6 +270,7 @@ func readPump(state *State, p *Peer) {
 	header := &protocol.CoordinatorMessage{}
 	webRtcMessage := &protocol.WebRtcMessage{}
 	connectMessage := &protocol.ConnectMessage{}
+	connectionRefusedMessage := &protocol.ConnectionRefusedMessage{}
 
 	for {
 		bytes, err := p.conn.ReadMessage()
@@ -322,6 +323,26 @@ func readPump(state *State, p *Peer) {
 				from:    p,
 				bytes:   bytes,
 				toAlias: connectMessage.ToAlias,
+			}
+		case protocol.MessageType_CONNECTION_REFUSED:
+			if err := marshaller.Unmarshal(bytes, connectionRefusedMessage); err != nil {
+				log.Debug().Err(err).Msg("decode connection refused connection message failure")
+				continue
+			}
+
+			connectionRefusedMessage.FromAlias = p.Alias
+
+			bytes, err := marshaller.Marshal(connectionRefusedMessage)
+			if err != nil {
+				log.Error().Err(err).Msg("cannot reencode refused connection message")
+				continue
+			}
+
+			state.signalingQueue <- &inMessage{
+				msgType: msgType,
+				from:    p,
+				bytes:   bytes,
+				toAlias: connectionRefusedMessage.ToAlias,
 			}
 		default:
 			log.Debug().Str("type", msgType.String()).Msg("unhandled message")

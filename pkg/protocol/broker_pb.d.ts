@@ -115,6 +115,44 @@ export namespace WebRtcMessage {
   }
 }
 
+export class ConnectionRefusedMessage extends jspb.Message {
+  getType(): MessageType;
+  setType(value: MessageType): void;
+
+  getFromAlias(): number;
+  setFromAlias(value: number): void;
+
+  getToAlias(): number;
+  setToAlias(value: number): void;
+
+  getReason(): ConnectionRefusedReason;
+  setReason(value: ConnectionRefusedReason): void;
+
+  getData(): Uint8Array | string;
+  getData_asU8(): Uint8Array;
+  getData_asB64(): string;
+  setData(value: Uint8Array | string): void;
+
+  serializeBinary(): Uint8Array;
+  toObject(includeInstance?: boolean): ConnectionRefusedMessage.AsObject;
+  static toObject(includeInstance: boolean, msg: ConnectionRefusedMessage): ConnectionRefusedMessage.AsObject;
+  static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+  static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+  static serializeBinaryToWriter(message: ConnectionRefusedMessage, writer: jspb.BinaryWriter): void;
+  static deserializeBinary(bytes: Uint8Array): ConnectionRefusedMessage;
+  static deserializeBinaryFromReader(message: ConnectionRefusedMessage, reader: jspb.BinaryReader): ConnectionRefusedMessage;
+}
+
+export namespace ConnectionRefusedMessage {
+  export type AsObject = {
+    type: MessageType,
+    fromAlias: number,
+    toAlias: number,
+    reason: ConnectionRefusedReason,
+    data: Uint8Array | string,
+  }
+}
+
 export class MessageHeader extends jspb.Message {
   getType(): MessageType;
   setType(value: MessageType): void;
@@ -381,6 +419,8 @@ export enum MessageType {
   TOPIC_FW = 10,
   TOPIC_IDENTITY = 11,
   TOPIC_IDENTITY_FW = 12,
+  CONNECTION_REFUSED = 13,
+  ERROR = 14,
 }
 
 export enum Role {
@@ -394,5 +434,11 @@ export enum Format {
   UNKNOWN_FORMAT = 0,
   PLAIN = 1,
   GZIP = 2,
+}
+
+export enum ConnectionRefusedReason {
+  UNKNOWN_REASON = 0,
+  SERVER_FULL = 1,
+  AUTH_FAILED = 2,
 }
 
