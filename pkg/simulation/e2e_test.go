@@ -28,6 +28,7 @@ const (
 var testLogLevel = zerolog.InfoLevel
 var clientLogLevel = zerolog.WarnLevel
 var serverLogLevel = zerolog.WarnLevel
+var serverWebRtcLogLevel = zerolog.ErrorLevel
 var coordinatorLogLevel = zerolog.WarnLevel
 
 type PeerWriter = broker.PeerWriter
@@ -87,6 +88,8 @@ func startBroker(t *testing.T, coordinatorURL string, role protocol.Role) *broke
 
 func startBrokerWithConfig(t *testing.T, config *broker.Config) *broker.Broker {
 	config.Auth = &authentication.NoopAuthenticator{}
+	config.WebRtcLogLevel = serverWebRtcLogLevel
+	config.ExitOnCoordinatorClose = false
 	log := logging.New().Level(serverLogLevel)
 	config.Log = &log
 

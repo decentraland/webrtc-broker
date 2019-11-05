@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -65,8 +67,10 @@ type Config struct {
 	UnreliableWriterControllerFactory           WriterControllerFactory
 	ReliableChannelBufferedAmountLowThreshold   uint64
 	UnreliableChannelBufferedAmountLowThreshold uint64
-	Role                                        protocol.Role
 	MaxPeers                                    uint16
+	ExitOnCoordinatorClose                      bool
+	WebRtcLogLevel                              zerolog.Level
+	Role                                        protocol.Role
 }
 
 type peer struct {
@@ -630,11 +634,12 @@ func NewBroker(config *Config) (*Broker, error) {
 	var err error
 
 	broker.Server, err = server.NewServer(&server.Config{
+		WebRtcLogLevel:         config.WebRtcLogLevel,
 		Log:                    &log,
 		ICEServers:             config.ICEServers,
 		OnNewPeerHdlr:          broker.onNewPeer,
 		OnPeerDisconnectedHdlr: broker.onPeerDisconnected,
-		ExitOnCoordinatorClose: true,
+		ExitOnCoordinatorClose: config.ExitOnCoordinatorClose,
 		MaxPeers:               config.MaxPeers,
 	})
 	if err != nil {

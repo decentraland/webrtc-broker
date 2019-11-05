@@ -3,9 +3,9 @@ module github.com/decentraland/webrtc-broker
 require (
 	github.com/golang/protobuf v1.3.0
 	github.com/gorilla/websocket v1.4.0
-	github.com/pion/datachannel v1.4.12
+	github.com/pion/datachannel v1.4.13
 	github.com/pion/logging v0.2.2
-	github.com/pion/webrtc/v2 v2.1.13-0.20191101114654-d2ca4202d273
+	github.com/pion/webrtc/v2 v2.1.13-0.20191103234140-e5b0aa786e1d
 	github.com/rs/zerolog v1.14.3
 	github.com/stretchr/objx v0.1.1 // indirect
 	github.com/stretchr/testify v1.4.0

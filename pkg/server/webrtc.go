@@ -7,6 +7,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/pion/datachannel"
 	pion "github.com/pion/webrtc/v2"
@@ -53,6 +55,7 @@ type IWebRtc interface {
 type webRTC struct {
 	ICEServers  []ICEServer
 	certificate *pion.Certificate
+	LogLevel    zerolog.Level
 }
 
 func (w *webRTC) getCertificates() ([]pion.Certificate, error) {
@@ -82,7 +85,7 @@ func (w *webRTC) newConnection(peerAlias uint64) (*PeerConnection, error) {
 	s.SetRelayAcceptanceMinWait(5 * time.Second)
 	s.SetTrickle(true)
 
-	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: peerAlias}
+	s.LoggerFactory = &logging.PionLoggingFactory{DefaultLogLevel: w.LogLevel, PeerAlias: peerAlias}
 	s.DetachDataChannels()
 
 	api := pion.NewAPI(pion.WithSettingEngine(s))

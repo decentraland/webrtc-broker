@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
 
@@ -21,6 +23,7 @@ type Config struct {
 	ICEServers              []ICEServer
 	ExitOnCoordinatorClose  bool
 	MaxPeers                uint16
+	WebRtcLogLevel          zerolog.Level
 
 	OnNewPeerHdlr          func(p *Peer) error
 	OnPeerDisconnectedHdlr func(p *Peer)
@@ -120,7 +123,7 @@ func NewServer(config *Config) (*Server, error) {
 	server.log = log
 
 	if server.webRtc == nil {
-		server.webRtc = &webRTC{ICEServers: config.ICEServers}
+		server.webRtc = &webRTC{ICEServers: config.ICEServers, LogLevel: config.WebRtcLogLevel}
 	}
 
 	return server, nil

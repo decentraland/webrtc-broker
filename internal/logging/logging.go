@@ -56,11 +56,12 @@ func (ll *levelLogger) Errorf(format string, args ...interface{}) {
 
 // PionLoggingFactory is the log factory expected by pion
 type PionLoggingFactory struct {
-	PeerAlias uint64
+	PeerAlias       uint64
+	DefaultLogLevel zerolog.Level
 }
 
 // NewLogger creates a new logger for the given scope
 func (f *PionLoggingFactory) NewLogger(scope string) pionlogging.LeveledLogger {
-	log := New().Level(zerolog.ErrorLevel).With().Uint64("peer", f.PeerAlias).Logger()
+	log := New().Level(f.DefaultLogLevel).With().Uint64("peer", f.PeerAlias).Logger()
 	return &levelLogger{log: log}
 }

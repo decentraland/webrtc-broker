@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/decentraland/webrtc-broker/internal/logging"
 	"github.com/decentraland/webrtc-broker/pkg/authentication"
 	protocol "github.com/decentraland/webrtc-broker/pkg/protocol"
@@ -147,7 +149,7 @@ func (client *Client) Connect(alias uint64, serverAlias uint64) error {
 	s := pion.SettingEngine{}
 	s.DetachDataChannels()
 	s.SetTrickle(true)
-	s.LoggerFactory = &logging.PionLoggingFactory{PeerAlias: alias}
+	s.LoggerFactory = &logging.PionLoggingFactory{DefaultLogLevel: zerolog.WarnLevel, PeerAlias: alias}
 	api := pion.NewAPI(pion.WithSettingEngine(s))
 
 	webRtcConfig := pion.Configuration{ICEServers: client.iceServers}
