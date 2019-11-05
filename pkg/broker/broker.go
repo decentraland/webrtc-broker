@@ -67,10 +67,11 @@ type Config struct {
 	UnreliableWriterControllerFactory           WriterControllerFactory
 	ReliableChannelBufferedAmountLowThreshold   uint64
 	UnreliableChannelBufferedAmountLowThreshold uint64
-	MaxPeers                                    uint16
-	ExitOnCoordinatorClose                      bool
-	WebRtcLogLevel                              zerolog.Level
-	Role                                        protocol.Role
+
+	MaxPeers               uint16
+	ExitOnCoordinatorClose bool
+	WebRtcLogLevel         zerolog.Level
+	Role                   protocol.Role
 }
 
 type peer struct {
