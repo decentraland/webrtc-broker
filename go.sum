@@ -33,6 +33,8 @@ github.com/pion/datachannel v1.4.13 h1:ezTn3AtUtXvKemRRjRdUgao/T8bH4ZJwrpOqU8Iz3
 github.com/pion/datachannel v1.4.13/go.mod h1:+rBUwEDonA63KXx994DP/ofyyGVAm6AIMvOqQZxjWRU=
 github.com/pion/dtls v1.5.3 h1:zLEjR0hUiXGermhTFq4DmhALcRz9u+lSa//AH7H1sW0=
 github.com/pion/dtls v1.5.3/go.mod h1:v4ULmyyV65geAZQBBckCjgMhmngTqz7HQVsQVYnfkGo=
+github.com/pion/dtls/v2 v2.0.0-rc.2 h1:z+V82CBDb81HzWxoU947iYw9n+P5Q8tiqtYeTC5ujDo=
+github.com/pion/dtls/v2 v2.0.0-rc.2/go.mod h1:x0XH+cN5z+l/+/4nYL8r4sB8g6+0d1Zp2Pfkcoz8BKY=
 github.com/pion/ice v0.7.2 h1:b+QxnpJ7AVyFDXBOMnEypNXS+fZM8+4+itNInwrrI6U=
 github.com/pion/ice v0.7.2/go.mod h1:xLKf+788DA/ZubtdBfiDT3vnEmIdiF5eDqjs4rzUAg8=
 github.com/pion/logging v0.2.1/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
@@ -65,6 +67,8 @@ github.com/pion/turn v1.4.0 h1:7NUMRehQz4fIo53Qv9ui1kJ0Kr1CA82I81RHKHCeM80=
 github.com/pion/turn v1.4.0/go.mod h1:aDSi6hWX/hd1+gKia9cExZOR0MU95O7zX9p3Gw/P2aU=
 github.com/pion/webrtc/v2 v2.1.13-0.20191103234140-e5b0aa786e1d h1:fvI1ubo5FzaIlPR36zqg467uZZZN0zDczS16IonbRGo=
 github.com/pion/webrtc/v2 v2.1.13-0.20191103234140-e5b0aa786e1d/go.mod h1:2EILtr12Uc8RMGcx7KetbaqkFsLB3Kfe1lm09YezFX8=
+github.com/pion/webrtc/v2 v2.1.15 h1:rUKORgdtEct2GTMzrOuYer/ed+LfB/Z+yWPParDhXAw=
+github.com/pion/webrtc/v2 v2.1.15/go.mod h1:PIj2ATbwannVn6yNx90AOhg1L0ge4NA5+OddxmUJezc=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
@@ -84,6 +88,9 @@ golang.org/x/crypto v0.0.0-20190228161510-8dd112bcdc25/go.mod h1:djNgcEr1/C05ACk
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20191001170739-f9e2070545dc h1:KyTYo8xkh/2WdbFLUyQwBS0Jfn3qfZ9QmuPbok2oENE=
 golang.org/x/crypto v0.0.0-20191001170739-f9e2070545dc/go.mod h1:yigFU9vqHzYiE8UmvKecakEJjdnWj3jj499lnFckfCI=
+golang.org/x/crypto v0.0.0-20191029031824-8986dd9e96cf/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
+golang.org/x/crypto v0.0.0-20191122220453-ac88ee75c92c h1:/nJuwDLoL/zrqY6gf57vxC+Pi+pZ8bfhpPkicO5H7W4=
+golang.org/x/crypto v0.0.0-20191122220453-ac88ee75c92c/go.mod h1:LzIPMQfyMNhhGPhUkYOs5KpL4U8rLKemX1yGLhDgUto=
 golang.org/x/net v0.0.0-20180906233101-161cd47e91fd/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
 golang.org/x/net v0.0.0-20190311183353-d8887717615a/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
 golang.org/x/net v0.0.0-20190404232315-eb5bcb51f2a3/go.mod h1:t9HGtf8HONx5eT2rtn7q6eTqICYqUVnKs3thJo3Qplg=
