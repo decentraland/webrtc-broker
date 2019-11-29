@@ -814,7 +814,9 @@ func (b *Broker) broadcastSubscriptionChange() error {
 	for _, p := range b.peers {
 		if p.getRole() == protocol.Role_COMMUNICATION_SERVER {
 			p.Log.Debug().Msg("send topic change (to server)")
+
 			serverCount++
+
 			p.WriteReliable(rawMsg)
 		}
 	}

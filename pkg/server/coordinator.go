@@ -146,6 +146,7 @@ func (c *coordinator) writePump() {
 
 	defer func() {
 		ticker.Stop()
+
 		if err := c.conn.Close(); err != nil {
 			log.Debug().Err(err).Msg("error closing connection on writePump exit")
 		}

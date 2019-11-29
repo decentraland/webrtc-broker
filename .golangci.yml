@@ -11,6 +11,7 @@ linters:
     - funlen
     - gocognit
     - gocyclo
+    - gomnd
 
 issues:
   exclude-use-default: false

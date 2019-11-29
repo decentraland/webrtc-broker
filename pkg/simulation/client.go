@@ -359,6 +359,7 @@ func (client *Client) startCoordination() error {
 				client.log.Fatal().Err(err).Msg("write coordinator message")
 			}
 		}
+
 		client.log.Debug().Msg("channel closed")
 	}()
 

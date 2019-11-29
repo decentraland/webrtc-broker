@@ -79,6 +79,7 @@ func main() {
 							}
 						case <-reportTicker.C:
 							log.Println("Avg duration between position messages")
+
 							for alias, stats := range peers {
 								fmt.Printf("%d: %f ms\n", alias, stats.Avg())
 

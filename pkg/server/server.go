@@ -356,6 +356,7 @@ func (s *Server) initPeer(alias uint64) (*Peer, error) {
 
 	go func() {
 		time.Sleep(establishSessionTimeout)
+
 		if s.webRtc.isNew(conn) {
 			p.Log.Info().
 				Msg("ICEConnectionStateNew after establish timeout, closing connection and queued to unregister")
